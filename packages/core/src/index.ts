@@ -42,7 +42,7 @@ export type { InstallInfo, InstallKind, UpdateStatus, ApplyResult } from './upda
 
 // Workspace
 export { Workspace, SWARM_DIR, estimateTokens } from './workspace/store.js';
-export type { ModuleFile } from './workspace/store.js';
+export type { ModuleFile, StateFile } from './workspace/store.js';
 export { DEFAULT_CONFIG, parseConfig, serializeConfig } from './workspace/config.js';
 export type { SwarmConfig } from './workspace/config.js';
 

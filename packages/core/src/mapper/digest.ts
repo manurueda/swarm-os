@@ -33,8 +33,10 @@ export interface RepoDigest {
   docs: Array<{ path: string; headings: string[] }>;
   /** Project manifests found at the root. */
   manifests: Array<{ path: string; excerpt: string }>;
-  /** Stable fingerprint of the file list, to detect drift after mapping. */
+  /** Fingerprint of every file's path AND content, to detect drift after mapping. */
   hash: string;
+  /** Per-file content fingerprints, so per-module drift can be computed. */
+  fingerprints: Map<string, string>;
 }
 
 /** Under this many tracked files, send real paths instead of aggregates. */
@@ -86,6 +88,63 @@ function isNoise(path: string): boolean {
   return path
     .split('/')
     .some((seg) => NOISE_SEGMENTS.has(seg) || seg.endsWith('.egg-info'));
+}
+
+/**
+ * Content fingerprints, one per tracked file.
+ *
+ * The fingerprint has to change when a file's CONTENT changes, not only when
+ * files are added or removed. Hashing the path list alone means a module whose
+ * code was rewritten entirely still looks untouched, is never re-analysed, and
+ * its memory quietly goes stale — which defeats the whole point of re-mapping
+ * when you sit back down at a project.
+ *
+ * `git ls-files -s` gives the index blob SHA for free, so this costs one git
+ * call rather than reading every file. Working-tree edits that are not staged
+ * do not change that SHA, so `git status` supplies those separately.
+ */
+async function fileFingerprints(repoRoot: string, files: string[]): Promise<Map<string, string>> {
+  const prints = new Map<string, string>();
+
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-files', '-s', '-z'], {
+      cwd: repoRoot,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    for (const entry of stdout.split('\0')) {
+      // "<mode> <sha> <stage>\t<path>"
+      const tab = entry.indexOf('\t');
+      if (tab === -1) continue;
+      const meta = entry.slice(0, tab).split(' ');
+      const path = entry.slice(tab + 1);
+      if (meta[1]) prints.set(path, meta[1]);
+    }
+
+    // Anything modified in the working tree gets its own marker, so an unstaged
+    // edit counts as drift too.
+    const { stdout: status } = await execFileAsync('git', ['status', '--porcelain', '-z'], {
+      cwd: repoRoot,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    for (const entry of status.split('\0')) {
+      const path = entry.slice(3).trim();
+      if (path) prints.set(path, `dirty:${entry.slice(0, 2)}:${path}`);
+    }
+  } catch {
+    // Not a git repo: fall back to size and mtime, which is coarser but still
+    // reacts to edits.
+    const { stat } = await import('node:fs/promises');
+    for (const file of files) {
+      try {
+        const info = await stat(join(repoRoot, file));
+        prints.set(file, `${info.size}:${Math.floor(info.mtimeMs)}`);
+      } catch {
+        prints.set(file, 'missing');
+      }
+    }
+  }
+
+  return prints;
 }
 
 /** List tracked files via git, falling back to a filesystem walk. */
@@ -261,7 +320,11 @@ export async function buildDigest(repoRoot: string): Promise<RepoDigest> {
     if (excerpt) manifests.push({ path: candidate, excerpt });
   }
 
-  const hash = createHash('sha256').update(files.join('\n')).digest('hex').slice(0, 16);
+  const prints = await fileFingerprints(repoRoot, files);
+  const hash = createHash('sha256')
+    .update(files.map((f) => `${f}\u0000${prints.get(f) ?? ''}`).join('\n'))
+    .digest('hex')
+    .slice(0, 16);
   const repoName = repoRoot.slice(repoRoot.lastIndexOf('/') + 1);
 
   return {
@@ -274,6 +337,7 @@ export async function buildDigest(repoRoot: string): Promise<RepoDigest> {
     docs,
     manifests,
     hash,
+    fingerprints: prints,
   };
 }
 

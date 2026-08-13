@@ -25,11 +25,25 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-interface StateFile {
+/**
+ * `.swarm/state.json`.
+ *
+ * Every field here has to survive a round-trip. An earlier version of
+ * `readState` rebuilt this object from two known keys and dropped the rest,
+ * which meant every `updateSwarm` — and so every sleep, wake and mission —
+ * silently erased the fingerprints. Incremental mapping then never fired, and
+ * `swarm map` reported "nothing to re-analyse" on a repository that had
+ * changed completely. Read it whole, write it whole.
+ */
+export interface StateFile {
   swarms: Record<string, SwarmRecord>;
   mappedAt?: string;
-  /** Digest fingerprint at map time, so `swarm status` can flag drift. */
+  /** Digest fingerprint at map time, so drift can be detected without a model. */
   digestHash?: string;
+  /** Per-module file fingerprints, so only changed modules are re-analysed. */
+  moduleHashes?: Record<string, string>;
+  /** The system summary, reused when a re-map does not repartition. */
+  system?: { summary: string; stack: string };
 }
 
 export class Workspace {
@@ -287,8 +301,10 @@ export class Workspace {
     try {
       const raw: unknown = JSON.parse(await readFile(this.statePath(), 'utf8'));
       if (typeof raw !== 'object' || raw === null) return { swarms: {} };
-      const state = raw as Partial<StateFile>;
-      return { swarms: state.swarms ?? {}, ...(state.mappedAt ? { mappedAt: state.mappedAt } : {}) };
+      // Preserve every field, including any this version does not know about.
+      // Rebuilding from known keys loses the fingerprints on the next write.
+      const state = raw as Partial<StateFile> & Record<string, unknown>;
+      return { ...state, swarms: state.swarms ?? {} } as StateFile;
     } catch {
       return { swarms: {} };
     }

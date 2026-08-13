@@ -70,14 +70,12 @@ export interface MapResult {
   conflicts: OwnershipConflict[];
 }
 
-interface MapStateExtras {
-  digestHash?: string;
-  moduleHashes?: Record<string, string>;
-  system?: { summary: string; stack: string };
-}
-
-function hashFiles(files: string[]): string {
-  return createHash('sha256').update(files.join('\n')).digest('hex').slice(0, 16);
+/** A module's fingerprint: which files it owns, and what is in each of them. */
+function hashFiles(files: string[], prints?: Map<string, string>): string {
+  return createHash('sha256')
+    .update(files.map((f) => `${f}\u0000${prints?.get(f) ?? ''}`).join('\n'))
+    .digest('hex')
+    .slice(0, 16);
 }
 
 function filesFor(digest: RepoDigest, globs: string[]): string[] {
@@ -110,7 +108,6 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
   });
 
   const state = await workspace.readState();
-  const extras = state as unknown as MapStateExtras;
   const existing = await workspace.listModules();
 
   const shouldPartition =
@@ -139,7 +136,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
     });
   } else {
     modules = existing;
-    system = extras.system ?? { summary: '', stack: '' };
+    system = state.system ?? { summary: '', stack: '' };
     report({
       phase: 'partition',
       message: `reusing existing map (${modules.length} modules) — pass --repartition to redraw boundaries`,
@@ -163,12 +160,12 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
   }
 
   // -- 3. Analyse -----------------------------------------------------------
-  const previousHashes = extras.moduleHashes ?? {};
+  const previousHashes = state.moduleHashes ?? {};
   const siblings = modules.map((m) => ({ slug: m.slug, purpose: m.purpose }));
 
   const plan = modules.map((spec) => {
     const owned = filesFor(digest, spec.owns);
-    const hash = hashFiles(owned);
+    const hash = hashFiles(owned, digest.fingerprints);
     const unchanged = !options.force && previousHashes[spec.slug] === hash;
     return { spec: { ...spec, fileCount: owned.length }, hash, unchanged };
   });
@@ -288,8 +285,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
   const recordProgress = (slug: string, hash: string, memoryTokens: number): Promise<void> => {
     stateWrites = stateWrites.then(async () => {
       const current = await workspace.readState();
-      const extra = current as unknown as MapStateExtras;
-      extra.moduleHashes = { ...(extra.moduleHashes ?? {}), [slug]: hash };
+      current.moduleHashes = { ...(current.moduleHashes ?? {}), [slug]: hash };
       current.swarms[slug] = { module: slug, state: 'sleeping', memoryTokens };
       await workspace.writeState(current);
     });
@@ -336,6 +332,10 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
           entry.spec,
           renderStructuralCharter(entry.spec, system.summary),
         );
+        // Drop any hash this module carried from an earlier map. Inheriting one
+        // makes the next run consider it up to date, so a module that failed is
+        // never retried until something else in it happens to change.
+        delete moduleHashes[entry.spec.slug];
         results.set(entry.spec.slug, {
           spec: entry.spec,
           status: 'failed',
@@ -367,7 +367,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
       await workspace.writeModuleFile(spec.slug, 'memory.md', memory);
 
       const memoryTokens = estimateTokens(memory);
-      const hash = analysis.correctedOwns ? hashFiles(ownedNow) : entry.hash;
+      const hash = analysis.correctedOwns ? hashFiles(ownedNow, digest.fingerprints) : entry.hash;
       moduleHashes[spec.slug] = hash;
       costUsd += outcome.costUsd ?? 0;
       await recordProgress(spec.slug, hash, memoryTokens);
@@ -482,13 +482,25 @@ export async function detectDrift(workspace: Workspace): Promise<{
   drifted: boolean;
   changedModules: string[];
   mappedAt?: string;
+  /** True when no fingerprint is on record, so drift cannot be ruled out. */
+  unknown?: boolean;
 }> {
   const state = await workspace.readState();
-  const extras = state as unknown as MapStateExtras;
-  if (!extras.digestHash) return { drifted: false, changedModules: [] };
+  const modules = await workspace.listModules();
+
+  // No fingerprint is not the same as no change. A map written by an older
+  // version, or one whose state was clobbered, cannot be compared — and
+  // reporting "unchanged" there is a claim the data does not support.
+  if (!state.digestHash) {
+    return modules.length > 0
+      ? { drifted: true, unknown: true, changedModules: modules.map((m) => m.slug) }
+      : { drifted: false, changedModules: [] };
+  }
 
   const digest = await buildDigest(workspace.repoRoot);
-  if (digest.hash === extras.digestHash) {
+  const unanalysed = modules.filter((m) => (state.moduleHashes ?? {})[m.slug] === undefined);
+
+  if (digest.hash === state.digestHash && unanalysed.length === 0) {
     return {
       drifted: false,
       changedModules: [],
@@ -496,10 +508,15 @@ export async function detectDrift(workspace: Workspace): Promise<{
     };
   }
 
-  const modules = await workspace.listModules();
-  const previous = extras.moduleHashes ?? {};
+  const previous = state.moduleHashes ?? {};
+  // A module with no recorded hash was never successfully analysed — it needs
+  // work regardless of whether anything in the repository moved.
   const changed = modules
-    .filter((m) => previous[m.slug] !== hashFiles(filesFor(digest, m.owns)))
+    .filter(
+      (m) =>
+        previous[m.slug] === undefined ||
+        previous[m.slug] !== hashFiles(filesFor(digest, m.owns), digest.fingerprints),
+    )
     .map((m) => m.slug);
 
   return {

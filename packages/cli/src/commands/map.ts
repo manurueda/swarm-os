@@ -51,7 +51,9 @@ export async function mapCommand(args: ParsedArgs): Promise<number> {
       return 0;
     }
     note(
-      `${drift.changedModules.length} module(s) changed since mapping — re-analysing only those.`,
+      drift.unknown
+        ? 'no fingerprint on record for this map — re-analysing every module.'
+        : `${drift.changedModules.length} module(s) changed since mapping — re-analysing only those.`,
     );
   }
 
