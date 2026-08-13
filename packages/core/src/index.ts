@@ -12,7 +12,7 @@
 export * from './types.js';
 
 // Runtime adapters
-export { ClaudeCodeLocalRuntime } from './runtime/claude-code-local.js';
+export { ClaudeCodeLocalRuntime, killAllAgents } from './runtime/claude-code-local.js';
 export type { ClaudeCodeLocalOptions, AuthStatus } from './runtime/claude-code-local.js';
 export { collectAgent, sumUsage } from './runtime/collect.js';
 export type { AgentOutcome } from './runtime/collect.js';
@@ -42,7 +42,7 @@ export type { InstallInfo, InstallKind, UpdateStatus, ApplyResult } from './upda
 
 // Workspace
 export { Workspace, SWARM_DIR, estimateTokens } from './workspace/store.js';
-export type { ModuleFile, StateFile } from './workspace/store.js';
+export type { ModuleFile, StateFile, MemoryArea } from './workspace/store.js';
 export { DEFAULT_CONFIG, parseConfig, serializeConfig } from './workspace/config.js';
 export type { SwarmConfig } from './workspace/config.js';
 
@@ -123,6 +123,7 @@ export {
   currentBranch,
   isWorkingTreeClean,
   createWorktree,
+  linkDependencies,
   removeWorktree,
   pruneWorktrees,
   changedFiles,

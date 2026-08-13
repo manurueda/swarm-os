@@ -26,6 +26,32 @@ import { detectBillingEnv, scrubEnv } from './env.js';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Every agent process this runtime has running.
+ *
+ * `process.exit()` does not unwind async generators, so the `finally` that
+ * stops a child never runs on an abrupt exit. Children share the process group
+ * when the signal comes from a terminal, but a signal from anywhere else would
+ * leave them alive — still holding a session and still spending quota after the
+ * user cancelled. This registry is the backstop.
+ */
+const liveChildren = new Set<{ kill: (signal?: NodeJS.Signals) => boolean }>();
+
+/** Stop every running agent. Safe to call more than once. */
+export function killAllAgents(signal: NodeJS.Signals = 'SIGTERM'): number {
+  let stopped = 0;
+  for (const child of liveChildren) {
+    try {
+      child.kill(signal);
+      stopped += 1;
+    } catch {
+      /* already gone */
+    }
+  }
+  liveChildren.clear();
+  return stopped;
+}
+
 export interface ClaudeCodeLocalOptions {
   /** Path to the claude binary. Defaults to `claude` on PATH. */
   bin?: string;
@@ -225,6 +251,7 @@ export class ClaudeCodeLocalRuntime implements AgentRuntime {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    liveChildren.add(child);
 
     const queue: SwarmEvent[] = [];
     let resolveWaiter: (() => void) | undefined;
@@ -260,12 +287,14 @@ export class ClaudeCodeLocalRuntime implements AgentRuntime {
     });
 
     child.on('error', (err) => {
+      liveChildren.delete(child);
       failure = err instanceof Error ? err : new Error(String(err));
       finished = true;
       wake();
     });
 
     child.on('close', (code) => {
+      liveChildren.delete(child);
       for (const raw of buffer.flush()) {
         for (const event of translate(raw, ctx)) {
           if (event.type === 'agent.done') sawDone = true;

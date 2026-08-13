@@ -10,7 +10,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
@@ -54,6 +54,8 @@ export interface WorktreeHandle {
   branch: string;
   /** True when this call created it; false when an existing one was reused. */
   created: boolean;
+  /** Dependency directories linked in so the worktree can be built. */
+  linked?: string[];
 }
 
 /** Make sure worktrees are invisible to the parent repo's status. */
@@ -78,12 +80,45 @@ export async function ensureWorktreeIgnore(repoRoot: string, worktreeRoot: strin
  * Create (or reuse) a worktree on its own branch.
  * The branch is derived from the mission and module so it reads well in `git log`.
  */
+/**
+ * Link a repo's installed dependencies into a worktree.
+ *
+ * Symlinks, not copies: `node_modules` is routinely hundreds of megabytes and
+ * every agent gets its own worktree. The link points at the developer's own
+ * installed tree, which is the same one their build already uses.
+ *
+ * Returns the names that were linked. Missing sources are skipped silently —
+ * a repo with no `node_modules` is not an error, it is a repo in another
+ * language.
+ */
+export async function linkDependencies(
+  repoRoot: string,
+  worktreePath: string,
+  names: string[],
+): Promise<string[]> {
+  const linked: string[] = [];
+  for (const name of names) {
+    const source = join(repoRoot, name);
+    const target = join(worktreePath, name);
+    if (!existsSync(source) || existsSync(target)) continue;
+    try {
+      await symlink(source, target);
+      linked.push(name);
+    } catch {
+      // A failed link is not fatal; the agent will report it cannot build.
+    }
+  }
+  return linked;
+}
+
 export async function createWorktree(options: {
   repoRoot: string;
   worktreeRoot: string;
   name: string;
   branch: string;
   base?: string;
+  /** Gitignored directories to link in so the worktree is buildable. */
+  links?: string[];
 }): Promise<WorktreeHandle> {
   const { repoRoot, worktreeRoot, name, branch } = options;
   const path = join(repoRoot, worktreeRoot, name);
@@ -92,6 +127,7 @@ export async function createWorktree(options: {
   await mkdir(join(repoRoot, worktreeRoot), { recursive: true });
 
   if (existsSync(join(path, '.git'))) {
+    await linkDependencies(repoRoot, path, options.links ?? []);
     return { path, branch, created: false };
   }
 
@@ -106,7 +142,9 @@ export async function createWorktree(options: {
   const res = await git(repoRoot, args);
   if (!res.ok) throw new Error(`could not create worktree ${name}: ${res.stderr.trim()}`);
 
-  return { path, branch, created: true };
+  const linked = await linkDependencies(repoRoot, path, options.links ?? []);
+
+  return { path, branch, created: true, linked };
 }
 
 export async function removeWorktree(repoRoot: string, path: string): Promise<void> {

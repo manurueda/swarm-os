@@ -17,6 +17,7 @@
  */
 
 import { parseArgs } from './args.js';
+import { killAllAgents } from '@swarm-os/core';
 import { UserError } from './context.js';
 import { doctorCommand } from './commands/doctor.js';
 import { mapCommand } from './commands/map.js';
@@ -129,11 +130,27 @@ async function main(): Promise<number> {
 
 let interrupted = false;
 process.on('SIGINT', () => {
-  if (interrupted) process.exit(130);
+  // A second Ctrl-C means "now", so escalate and go.
+  if (interrupted) {
+    killAllAgents('SIGKILL');
+    process.exit(130);
+  }
   interrupted = true;
   line();
-  note('interrupting — agents are being stopped, swarms will be left as they are');
-  process.exit(130);
+
+  const stopped = killAllAgents('SIGTERM');
+  note(
+    stopped > 0
+      ? `interrupting — stopped ${stopped} agent${stopped === 1 ? '' : 's'}; swarms are left as they are`
+      : 'interrupting',
+  );
+
+  // Give the children a moment to die before the process leaves, otherwise
+  // exit() cuts the handler short and they outlive us.
+  setTimeout(() => {
+    killAllAgents('SIGKILL');
+    process.exit(130);
+  }, 1500);
 });
 
 main()

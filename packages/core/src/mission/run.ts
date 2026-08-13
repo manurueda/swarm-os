@@ -32,6 +32,8 @@ import {
   changedFiles,
   commitAll,
   createWorktree,
+  removeWorktree,
+  pruneWorktrees,
   currentBranch,
   diffStat,
   fullDiff,
@@ -200,7 +202,14 @@ export interface RunMissionOptions {
   modules?: string[];
   /** Route and write the plan, but spawn no work agents. */
   dryRun?: boolean;
-  /** Leave worktrees in place after the mission for inspection. */
+  /**
+   * Leave worktrees on disk after the mission.
+   *
+   * Off by default: the work is committed to a branch, so `git diff` from the
+   * main checkout shows everything, and a worktree is a full copy of the
+   * repository. Left behind they accumulate one per module per mission — on a
+   * 1,700-file repo that is gigabytes for nothing.
+   */
   keepWorktrees?: boolean;
   /** Skip the memory-compression step (faster, but the swarms learn nothing). */
   skipCompress?: boolean;
@@ -334,6 +343,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
           name: `${id}--${spec.slug}`,
           branch: `swarm/${id}/${spec.slug}`,
           base,
+          links: config.worktreeLinks,
         });
         worktreePath = handle.path;
         branch = handle.branch;
@@ -538,6 +548,27 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
         ].join('\n'),
       );
     }
+  }
+
+  // -- release worktrees ----------------------------------------------------
+  // Only once every agent has finished and committed. The branch is the durable
+  // artifact; the checkout is scaffolding.
+  if (repoIsGit && !options.keepWorktrees) {
+    for (const result of results) {
+      if (!result.worktree || result.worktree === workspace.repoRoot) continue;
+      // A worktree with uncommitted changes still holds work — keep it, and say
+      // so, rather than deleting something that was never captured on a branch.
+      if (result.changedFiles.length > 0 && !result.committed) {
+        report({
+          phase: 'harvest',
+          message: 'uncommitted changes — worktree kept',
+          module: result.module,
+        });
+        continue;
+      }
+      await removeWorktree(workspace.repoRoot, result.worktree);
+    }
+    await pruneWorktrees(workspace.repoRoot);
   }
 
   const costUsd = results.reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
