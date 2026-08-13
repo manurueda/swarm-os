@@ -23,9 +23,26 @@ export {
   NESTING_ENV_VARS,
 } from './runtime/env.js';
 export { NdjsonBuffer, translate, tryParseJson } from './runtime/stream-json.js';
+export { standaloneSystemPrompt, standaloneAgentPrompt } from './runtime/system-tier.js';
+
+// Self-update
+export {
+  detectInstall,
+  checkForUpdate,
+  applyUpdate,
+  backgroundUpdate,
+  readUpdateStatus,
+  writeUpdateStatus,
+  isCheckDue,
+  updatesDisabled,
+  stateDir,
+  CHECK_INTERVAL_MS,
+} from './update/index.js';
+export type { InstallInfo, InstallKind, UpdateStatus, ApplyResult } from './update/index.js';
 
 // Workspace
 export { Workspace, SWARM_DIR, estimateTokens } from './workspace/store.js';
+export type { ModuleFile } from './workspace/store.js';
 export { DEFAULT_CONFIG, parseConfig, serializeConfig } from './workspace/config.js';
 export type { SwarmConfig } from './workspace/config.js';
 
@@ -37,8 +54,16 @@ export { mapProject, detectDrift } from './mapper/pipeline.js';
 export type { MapResult, MapProgress, MapModuleResult, MapPhase } from './mapper/pipeline.js';
 
 // Swarms
-export { analyzeModule, renderCharter, renderMemory } from './swarm/analyst.js';
-export type { ModuleAnalysis } from './swarm/analyst.js';
+export { analyzeModule, renderCharter, renderMemory, renderClaim, parseClaimLine } from './swarm/analyst.js';
+export type { ModuleAnalysis, Claim } from './swarm/analyst.js';
+export {
+  verifyModule,
+  extractClaims,
+  checkCitation,
+  renderVerification,
+  VERIFY_SCHEMA,
+} from './swarm/verify.js';
+export type { ModuleVerification, ClaimVerification, Verdict } from './swarm/verify.js';
 export { buildContextPack, wakeSwarm, sleepSwarm, sleepAll } from './swarm/manager.js';
 export type { ContextPack, SleepResult } from './swarm/manager.js';
 export { checkOwnership, isOwned, matchesGlob, findOwnershipConflicts } from './swarm/ownership.js';

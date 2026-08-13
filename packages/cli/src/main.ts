@@ -8,8 +8,10 @@
  * swarm mission "<goal>"           put the swarms to work
  * swarm missions                   past missions
  * swarm memory [module]            what a swarm knows
+ * swarm verify [module]            check that memory against the code
  * swarm sleep [module]             compress memory, release the swarm
  * swarm wake <module>              mark a swarm active
+ * swarm update                     update Swarm OS itself
  */
 
 import { parseArgs } from './args.js';
@@ -19,6 +21,8 @@ import { mapCommand } from './commands/map.js';
 import { missionCommand, missionsCommand } from './commands/mission.js';
 import { memoryCommand, statusCommand } from './commands/status.js';
 import { sleepCommand, wakeCommand } from './commands/swarms.js';
+import { verifyCommand } from './commands/verify.js';
+import { noticeIfUpdated, scheduleBackgroundUpdate, updateCommand } from './commands/update.js';
 import { c, fail, line, note } from './ui.js';
 
 const VERSION = '0.1.0';
@@ -36,8 +40,10 @@ ${c.bold('Commands')}
   mission "<goal>"          route a goal to modules and run them in parallel
   missions                  list past missions
   memory [module]           read what a swarm knows
+  verify [module]           check the memory is true, not just confident
   sleep [module]            compress memory and release
   wake <module>             mark a swarm active
+  update                    update Swarm OS itself
 
 ${c.bold('Common flags')}
   --repo <path>             operate on a specific repository
@@ -49,6 +55,8 @@ ${c.bold('Common flags')}
   --force                   map: re-analyse everything, discard existing map
   --repartition             map: redraw module boundaries, keep memory
   --measure                 doctor: measure lean-spawn savings on this machine
+  --citations-only          verify: deterministic check only, no agents
+  --check                   update: report only, do not apply
 
 ${c.bold('Getting started')}
   ${c.gray('$')} swarm doctor
@@ -57,6 +65,9 @@ ${c.bold('Getting started')}
 
 ${c.gray('Swarm OS never handles your credentials. Authenticate once with')}
 ${c.gray('`claude auth login`; agents inherit that. No API keys, ever.')}
+
+${c.gray('Updates itself in the background once a day, after a command finishes,')}
+${c.gray('never during one. Disable with SWARM_NO_UPDATE=1.')}
 `;
 
 async function main(): Promise<number> {
@@ -72,6 +83,9 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  // A background worker may have installed a new version since last run.
+  if (args.command !== 'update') await noticeIfUpdated();
+
   switch (args.command) {
     case 'doctor':
       return doctorCommand(args);
@@ -85,6 +99,10 @@ async function main(): Promise<number> {
       return missionsCommand(args);
     case 'memory':
       return memoryCommand(args);
+    case 'verify':
+      return verifyCommand(args);
+    case 'update':
+      return updateCommand(args);
     case 'sleep':
       return sleepCommand(args);
     case 'wake':
@@ -106,8 +124,11 @@ process.on('SIGINT', () => {
 });
 
 main()
-  .then((code) => {
+  .then(async (code) => {
     process.exitCode = code;
+    // Only ever after the real work is done, so an update can never compete
+    // with a running mission or swap files under a live agent.
+    if (!process.env['SWARM_UPDATE_WORKER']) await scheduleBackgroundUpdate();
   })
   .catch((err: unknown) => {
     line();

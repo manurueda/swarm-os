@@ -12,6 +12,7 @@
 
 import type { AgentRuntime, MissionPlan, ModuleSpec, SwarmEvent } from '../types.js';
 import { collectAgent, type AgentOutcome } from '../runtime/collect.js';
+import { standaloneSystemPrompt } from '../runtime/system-tier.js';
 
 export const ROUTE_SCHEMA = {
   type: 'object',
@@ -113,7 +114,7 @@ export async function routeMission(
       id: 'router',
       role: 'router',
       prompt,
-      systemPrompt: ROUTER_CHARTER,
+      systemPromptOverride: standaloneSystemPrompt(ROUTER_CHARTER),
       cwd: options.repoRoot,
       // The router must not start exploring the repo — that is the analysts' job.
       tools: [],

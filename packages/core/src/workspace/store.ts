@@ -17,6 +17,9 @@ import { DEFAULT_CONFIG, parseConfig, serializeConfig, type SwarmConfig } from '
 
 export const SWARM_DIR = '.swarm';
 
+/** Files that live inside a module's directory. */
+export type ModuleFile = 'module.md' | 'memory.md' | 'decisions.md' | 'verification.md';
+
 /** Cheap token estimate. Good enough for budgeting memory files. */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -158,7 +161,7 @@ export class Workspace {
     }
   }
 
-  async readModuleFile(slug: string, file: 'module.md' | 'memory.md' | 'decisions.md'): Promise<string> {
+  async readModuleFile(slug: string, file: ModuleFile): Promise<string> {
     try {
       return await readFile(join(this.moduleDir(slug), file), 'utf8');
     } catch {
@@ -166,11 +169,7 @@ export class Workspace {
     }
   }
 
-  async writeModuleFile(
-    slug: string,
-    file: 'module.md' | 'memory.md' | 'decisions.md',
-    content: string,
-  ): Promise<void> {
+  async writeModuleFile(slug: string, file: ModuleFile, content: string): Promise<void> {
     await mkdir(this.moduleDir(slug), { recursive: true });
     await writeFile(join(this.moduleDir(slug), file), content, 'utf8');
   }

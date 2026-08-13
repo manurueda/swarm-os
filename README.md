@@ -108,8 +108,10 @@ git diff main..swarm/2026-08-13-timeline-performance/rendering
 | `swarm mission "<goal>"` | route a goal and run the modules in parallel |
 | `swarm missions` | past missions |
 | `swarm memory [module]` | read what a swarm knows |
+| `swarm verify [module]` | check the memory is true, not just confident |
 | `swarm sleep [module]` | compress memory and release |
 | `swarm wake <module>` | mark a swarm active |
+| `swarm update` | update Swarm OS itself |
 
 Useful flags: `--dry-run`, `--modules a,b`, `--concurrency n`, `--model`,
 `--force`, `--repartition`, `--repo <path>`.
@@ -183,20 +185,45 @@ You run `claude auth login` once; agents resolve those credentials themselves.
 
 ---
 
-## Lean spawning
+## Context economy
 
-A trivial `claude -p "Reply with exactly: OK"` on a developer machine with MCP
-servers, skills and plugins configured:
+Every agent pays a fixed baseline before it reads a line of your code. Measured
+on Claude Code 2.1.231 with the prompt `"Reply with exactly: OK"`:
 
-| | baseline context |
+| spawn | baseline context |
 | --- | --- |
-| ambient environment | **94,911 tokens** |
-| lean spawn | **11,796 tokens** |
+| ambient environment (MCP servers, skills, plugins, user settings) | **31k – 95k** |
+| lean, all default tools | 30,350 |
+| lean, 6 work tools | 16,774 |
+| lean, 3 read-only tools | 11,798 |
+| lean, no tools | 8,746 |
+| no tools + own system prompt | **175** |
 
-Every agent pays that before reading a line of your code. Swarm OS spawns all
-agents lean — `--strict-mcp-config --disable-slash-commands --setting-sources ''`
-plus an explicit tool list — which on a Max plan is the difference between four
-agents per window and thirty, and gives each agent ~83k more usable context.
+The ambient figure is a range because it depends on how many MCP servers happen
+to be connected — two runs on the same machine measured 94,911 and 31,463.
+Everything below it is stable.
+
+Two things fall out of that table:
+
+**Tool definitions cost about 1k each.** Not just a JSON schema — each ships a
+long description with usage rules and edge cases. Six work tools cost ~8k.
+
+**Claude Code's own system prompt is ~8.5k**, and it is almost entirely guidance
+for using tools and navigating a codebase. An agent running with `--tools ""`
+cannot use any of it. Swarm OS's tool-less agents — the partitioner, router and
+memory compressor — therefore *replace* that prompt with their own charter
+rather than appending to it.
+
+That is cheaper and also measurably better. The same structured-output task:
+
+```
+default system prompt   28,925 tokens   →  {"modules": []}          wrong
+own system prompt        1,726 tokens   →  {"modules": [{...}]}     right
+```
+
+With nothing to act on, tool-use guidance is not neutral — it pushes the model
+to explore and be thorough when the correct behaviour is to answer once. Agents
+that *do* have tools keep the default prompt, with their charter appended.
 
 Measure it on your own machine:
 
@@ -204,10 +231,51 @@ Measure it on your own machine:
 swarm doctor --measure
 ```
 
-(Numbers above are from Claude Code 2.1.231. Work agents run with
-`--setting-sources project` so the target repo's own permissions still apply.)
-
 ---
+
+## Is the memory true?
+
+Durable memory is only an asset if it is accurate. A confident, wrong invariant
+is worse than an empty file — it gets loaded into every future mission and
+believed.
+
+```bash
+swarm verify              # every module
+swarm verify --citations-only    # deterministic, zero tokens
+```
+
+Two stages:
+
+1. **Citation resolution** — free. Every claim records the file it came from.
+   Does that file exist, and does it belong to the module? Catches invented
+   paths without a model call.
+2. **Adversarial re-read** — one fresh agent per module that sees *only the
+   claims*, never how they were derived, and tries to falsify each one against
+   the code. Returns supported / contradicted / unverifiable with `file:line`
+   evidence.
+
+Claims also record **provenance**: `code` if the analyst read the
+implementation, `doc` if a docstring or README asserted it and the analyst did
+not confirm it. Documentation-sourced claims are the ones that go stale, and
+they are marked `[doc]` in the memory file so a reader weights them differently.
+
+Reports land in `.swarm/modules/<slug>/verification.md`.
+
+## Updating
+
+Swarm OS checks for a new version once a day, in a detached background process
+started **after** a command finishes — never during one, so an update can't swap
+files under a live agent. The new version takes effect on the next invocation.
+
+```bash
+swarm update            # update now
+swarm update --check    # report only
+SWARM_NO_UPDATE=1       # disable entirely
+```
+
+A git checkout with uncommitted changes is never fast-forwarded — that's someone
+working on Swarm OS itself, and losing their work to an auto-update would be
+unforgivable. It's reported instead.
 
 ## Ownership is enforced, not requested
 
@@ -243,10 +311,13 @@ compression.
 
 Roadmap, in order:
 
-1. **Reviewer agents** — a per-mission reviewer that reads the diffs before you do
-2. **Cursor / VS Code extension** — sidebar and mission view over this same engine
-3. **Visual architecture map** — modules and their dependency edges
-4. **More runtimes** — `ClaudeApiRuntime` for distribution, others behind the
+1. **Sub-module memory** — measured across a 1,742-file repo, every module
+   saturates its 2k budget with ~12 sub-domains, i.e. ~170 tokens each. Routing
+   should stay coarse while memory gets addressed per area.
+2. **Reviewer agents** — a per-mission reviewer that reads the diffs before you do
+3. **Cursor / VS Code extension** — sidebar and mission view over this same engine
+4. **Visual architecture map** — modules and their dependency edges
+5. **More runtimes** — `ClaudeApiRuntime` for distribution, others behind the
    same `AgentRuntime` port
 
 ## Layout

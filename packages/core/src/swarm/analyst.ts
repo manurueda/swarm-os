@@ -16,6 +16,7 @@
 
 import type { AgentRuntime, ModuleSpec, SwarmEvent } from '../types.js';
 import { collectAgent, type AgentOutcome } from '../runtime/collect.js';
+import { standaloneAgentPrompt } from '../runtime/system-tier.js';
 
 export const MODULE_ANALYSIS_SCHEMA = {
   type: 'object',
@@ -55,13 +56,13 @@ export const MODULE_ANALYSIS_SCHEMA = {
     invariants: {
       type: 'array',
       maxItems: 10,
-      items: { type: 'string' },
+      items: { $ref: '#/$defs/claim' },
       description: 'Rules that must hold. Things a future agent would break by accident.',
     },
     gotchas: {
       type: 'array',
       maxItems: 10,
-      items: { type: 'string' },
+      items: { $ref: '#/$defs/claim' },
       description: 'Surprises, traps, misleading names, load-bearing hacks.',
     },
     publicInterface: {
@@ -81,14 +82,50 @@ export const MODULE_ANALYSIS_SCHEMA = {
       description: 'Only if the assigned globs were wrong. Otherwise omit.',
     },
   },
+  $defs: {
+    claim: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['text', 'path', 'source'],
+      properties: {
+        text: { type: 'string', description: 'The claim itself. Specific and checkable.' },
+        path: {
+          type: 'string',
+          description:
+            'Repo-relative file this claim is about. Must be a file you actually opened.',
+        },
+        source: {
+          type: 'string',
+          enum: ['code', 'doc'],
+          description:
+            'code = you read the implementation. doc = you read a docstring, README or comment ' +
+            'asserting it. Be honest: doc claims are checked against code before being trusted.',
+        },
+      },
+    },
+  },
 } as const;
+
+/**
+ * One checkable assertion about a module.
+ *
+ * Every claim carries the file it came from and whether it was read out of the
+ * implementation or merely asserted by a docstring. Both are what make
+ * `swarm verify` possible: the citation can be resolved without a model at all,
+ * and doc-sourced claims can be prioritised for checking against real code.
+ */
+export interface Claim {
+  text: string;
+  path: string;
+  source: 'code' | 'doc';
+}
 
 export interface ModuleAnalysis {
   purpose: string;
   entryPoints: Array<{ path: string; why: string }>;
   landmarks: Array<{ path: string; role: string }>;
-  invariants: string[];
-  gotchas: string[];
+  invariants: Claim[];
+  gotchas: Claim[];
   publicInterface: string[];
   dependsOn: string[];
   correctedOwns?: string[];
@@ -120,6 +157,17 @@ What is worth recording:
 What is not worth recording: anything a future agent could rediscover in ten
 seconds with Glob, restatements of file names, or generic advice.
 
+Every invariant and gotcha must carry two things:
+- PATH: the repo-relative file it is about. Cite a file you actually opened.
+  A citation that does not resolve is treated as a fabricated claim.
+- SOURCE: "code" if you read the implementation and saw it yourself; "doc" if a
+  docstring, README or comment asserted it and you did not confirm it in code.
+
+Be honest about "doc". Documentation goes stale, and a doc claim marked as code
+is worse than no claim at all — it is a false statement carrying full
+confidence into every future mission. Nothing bad happens to you for saying
+"doc"; those claims simply get verified against the implementation later.
+
 Be concrete and specific. Every line you write costs context in every future
 mission that touches this module, so make each one earn its place.`;
 
@@ -131,6 +179,12 @@ export interface AnalyzeModuleOptions {
   siblings: Array<{ slug: string; purpose: string }>;
   systemSummary: string;
   model?: string;
+  /**
+   * 'standalone' replaces Claude Code's default system prompt with the analyst's
+   * own charter plus the exploration guidance that actually applies, saving the
+   * ~8.5k the default costs. 'default' appends the charter to it instead.
+   */
+  promptMode?: 'standalone' | 'default';
   onEvent?: (event: SwarmEvent) => void | Promise<void>;
   signal?: AbortSignal;
 }
@@ -177,7 +231,13 @@ export async function analyzeModule(
       role: 'analyst',
       module: spec.slug,
       prompt,
-      systemPrompt: ANALYST_CHARTER,
+      ...(options.promptMode === 'default'
+        ? { systemPrompt: ANALYST_CHARTER }
+        : {
+            systemPromptOverride: standaloneAgentPrompt(ANALYST_CHARTER, {
+              scope: spec.owns,
+            }),
+          }),
       cwd: options.repoRoot,
       // Read-only by construction. An analyst cannot edit the repo.
       tools: ['Read', 'Grep', 'Glob'],
@@ -214,14 +274,33 @@ function parseAnalysis(raw: unknown): ModuleAnalysis | undefined {
   const strings = (v: unknown): string[] =>
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
+  const claims = (v: unknown): Claim[] =>
+    Array.isArray(v)
+      ? v.flatMap((x) => {
+          // Tolerate a bare string: older maps and stubborn models both produce
+          // them. An uncited claim is kept but marked unverifiable.
+          if (typeof x === 'string') return [{ text: x, path: '', source: 'doc' as const }];
+          if (typeof x !== 'object' || x === null) return [];
+          const r = x as Record<string, unknown>;
+          if (typeof r['text'] !== 'string') return [];
+          return [
+            {
+              text: r['text'],
+              path: typeof r['path'] === 'string' ? r['path'] : '',
+              source: r['source'] === 'code' ? ('code' as const) : ('doc' as const),
+            },
+          ];
+        })
+      : [];
+
   const corrected = strings(o['correctedOwns']);
 
   return {
     purpose: o['purpose'],
     entryPoints: pairs(o['entryPoints'], 'path', 'why') as Array<{ path: string; why: string }>,
     landmarks: pairs(o['landmarks'], 'path', 'role') as Array<{ path: string; role: string }>,
-    invariants: strings(o['invariants']),
-    gotchas: strings(o['gotchas']),
+    invariants: claims(o['invariants']),
+    gotchas: claims(o['gotchas']),
     publicInterface: strings(o['publicInterface']),
     dependsOn: strings(o['dependsOn']),
     ...(corrected.length > 0 ? { correctedOwns: corrected } : {}),
@@ -248,8 +327,8 @@ export function renderMemory(spec: ModuleSpec, analysis: ModuleAnalysis, generat
     '',
     `_Durable knowledge for the \`${spec.slug}\` swarm. Read on wake, rewritten on sleep._`,
     '',
-    ...section('Invariants', analysis.invariants.map((i) => `- ${i}`), 'None recorded yet.'),
-    ...section('Gotchas', analysis.gotchas.map((g) => `- ${g}`), 'None recorded yet.'),
+    ...section('Invariants', analysis.invariants.map(renderClaim), 'None recorded yet.'),
+    ...section('Gotchas', analysis.gotchas.map(renderClaim), 'None recorded yet.'),
     ...section(
       'Landmarks',
       analysis.landmarks.map((l) => `- \`${l.path}\` — ${l.role}`),
@@ -265,6 +344,29 @@ export function renderMemory(spec: ModuleSpec, analysis: ModuleAnalysis, generat
     `_Surveyed ${generatedAt} by the \`${spec.slug}\` analyst, reading only this module's paths._`,
     '',
   ].join('\n');
+}
+
+/**
+ * A claim line, carrying its citation inline.
+ *
+ * The `[doc]` marker is deliberately visible: an agent reading this memory
+ * should weight an unverified documentation claim differently from something
+ * read out of the implementation.
+ */
+export function renderClaim(claim: Claim): string {
+  const cite = claim.path ? ` <sub>\`${claim.path}\`${claim.source === 'doc' ? ' [doc]' : ''}</sub>` : '';
+  return `- ${claim.text}${cite}`;
+}
+
+/** Parse a rendered claim line back out of memory.md, for verification. */
+export function parseClaimLine(line: string): Claim | undefined {
+  const m = /^-\s+(.*?)(?:\s*<sub>`([^`]+)`(\s*\[doc\])?<\/sub>)?\s*$/.exec(line.trim());
+  if (!m?.[1]) return undefined;
+  return {
+    text: m[1].trim(),
+    path: m[2] ?? '',
+    source: m[3] ? 'doc' : m[2] ? 'code' : 'doc',
+  };
 }
 
 /** Render an analysis into the module's charter (module.md). */

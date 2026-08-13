@@ -9,6 +9,7 @@
 import type { AgentRuntime, ModuleSpec, SwarmEvent } from '../types.js';
 import { collectAgent, type AgentOutcome } from '../runtime/collect.js';
 import { isOwned } from '../swarm/ownership.js';
+import { standaloneSystemPrompt } from '../runtime/system-tier.js';
 import { buildDigest, renderDigest, type RepoDigest } from './digest.js';
 
 export const MODULE_MAP_SCHEMA = {
@@ -123,7 +124,8 @@ export async function mapRepository(options: {
       id: 'mapper',
       role: 'mapper',
       prompt: buildMapperPrompt(digest),
-      systemPrompt: MAPPER_CHARTER,
+      // Tool-less: replace Claude Code's default prompt rather than append to it.
+      systemPromptOverride: standaloneSystemPrompt(MAPPER_CHARTER),
       cwd: options.repoRoot,
       // No tools at all: the mapper must not be able to start reading the repo.
       tools: [],

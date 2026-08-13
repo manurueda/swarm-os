@@ -119,6 +119,16 @@ export interface AgentSpec {
   prompt: string;
   /** Appended to Claude Code's system prompt — the agent's charter. */
   systemPrompt?: string;
+  /**
+   * REPLACES Claude Code's default system prompt instead of appending to it.
+   *
+   * The default prompt is mostly tool-use guidance and harness description. An
+   * agent with no tools does not need any of it, so replacing it is a large
+   * saving for the system tier (partitioner, router, compressor). Never use
+   * this for an agent that has tools — it would lose the instructions that make
+   * tool use work.
+   */
+  systemPromptOverride?: string;
   /** Working directory. Normally a git worktree. */
   cwd: string;
   /** Extra directories the agent may touch beyond cwd. */

@@ -11,9 +11,8 @@ own machine with `swarm doctor --measure`.
 
 ## 1. The baseline you pay before doing anything
 
-A developer machine accumulates MCP servers, skills, plugins and user settings.
-Every one of them is injected into every agent process. The prompt below does no
-work at all:
+Every agent carries a fixed load before it reads a line of your code. The prompt
+below does no work at all:
 
 ```
 claude -p "Reply with exactly: OK"
@@ -21,23 +20,85 @@ claude -p "Reply with exactly: OK"
 
 | spawn | context consumed |
 | --- | --- |
-| ambient environment | **94,911 tokens** |
-| lean (`--strict-mcp-config --disable-slash-commands --setting-sources ''`) | **11,796 tokens** |
+| ambient environment (MCP servers, skills, plugins, user settings) | **31,463 – 94,911** |
+| lean, all default tools | 30,350 |
+| lean, 6 work tools (Read Write Edit Grep Glob Bash) | 16,774 |
+| lean, 3 read-only tools (Read Grep Glob) | 11,798 |
+| lean, no tools | 8,746 |
+| no tools + own system prompt | **175** |
 
-**8× difference, before reading a line of code.** On a shared subscription
-window that is the difference between roughly four agents and roughly thirty.
-It also returns ~83k tokens of usable window to each agent.
+The ambient figure is a *range*, not a number: two runs on the same machine
+measured 94,911 and 31,463 apart, depending on how many MCP servers happened to
+be connected at the time. Everything below it is stable.
 
-Swarm OS spawns every agent lean. Work agents additionally get
-`--setting-sources project` so the target repository's own permission rules
-still apply — the saving comes from dropping the *user's* ambient environment,
-not the project's configuration.
+Three separable costs are visible here.
+
+### Ambient environment — everything above 30k
+
+MCP tool schemas, skills, plugins and user settings, injected into every child
+process. Removed with `--strict-mcp-config --disable-slash-commands
+--setting-sources ''`. Work agents get `--setting-sources project` back so the
+target repository's own permission rules still apply — the saving comes from
+dropping the *user's* ambient environment, not the project's configuration.
 
 One flag deliberately **not** used: `--bare`. It strips more, but its
 documentation states that Anthropic auth becomes "strictly `ANTHROPIC_API_KEY`
 or `apiKeyHelper`" and that "OAuth and keychain are never read" — it would
 disable subscription auth and force API billing. Exactly what this tool exists
 to prevent.
+
+### Tool definitions — about 1k each
+
+Three read-only tools cost ~3,050 tokens; six work tools ~8,000; the full
+default set ~21,600. A tool is not just a JSON schema — each ships a long
+description covering usage rules and edge cases. So the tool list is a real
+budget decision, and every agent tier gets the smallest set that can do its job.
+
+### Claude Code's system prompt — about 8,570
+
+The gap between "lean, no tools" (8,746) and "no tools + own system prompt"
+(175). It is almost entirely guidance for using tools and navigating a codebase.
+
+An agent running with `--tools ""` cannot use any of it. So the tool-less system
+tier — partitioner, router, memory compressor — passes `--system-prompt`, which
+*replaces* that default with the agent's own charter rather than appending to
+it.
+
+This is cheaper and also measurably better. The same structured-output task:
+
+```
+default system prompt   28,925 tokens   →  {"modules": []}         wrong
+own system prompt        1,726 tokens   →  {"modules": [{...}]}    right
+```
+
+With nothing to act on, tool-use guidance is not neutral: it pushes the model to
+explore and be thorough when the correct behaviour is to answer once.
+
+### Does the same hold for agents that DO have tools?
+
+Tool *definitions* are sent separately from the system prompt, so an agent given
+`--tools Read,Grep,Glob` receives those three descriptions regardless. The
+question is only whether Claude Code's general guidance earns its 8.5k.
+
+Measured on a real analyst run over a 246-file module, same task both ways:
+
+| | default prompt | own prompt |
+| --- | --- | --- |
+| total context across all turns | 1,226,347 | **921,721** |
+| tool calls | 43 | 37 |
+| invariants / gotchas / landmarks | 10 / 9 / 12 | 10 / 10 / 12 |
+| claims with a specific detail | 16 | 17 |
+| claims carrying a citation | 19 | 20 |
+
+**~25% fewer tokens, no measurable quality loss.** This is n=1 — one module, one
+run, and model variance at this scale is large — so treat it as directional
+rather than settled.
+
+Read-only agents (analysts, verifiers) were switched over on that evidence.
+**Agents that write code were not**: they run with `Write`, `Edit` and `Bash`,
+the failure modes are worse, and the equivalent measurement has not been done.
+The option exists (`standaloneAgentPrompt(..., { canWrite: true })`) and is
+wired, but the default stays conservative until there is data.
 
 ---
 
@@ -161,7 +222,10 @@ model call happens at all.
 
 | mechanism | saves |
 | --- | --- |
-| lean spawning | ~83k tokens **per agent**, always |
+| lean spawning | the ambient environment, 20k–85k **per agent** |
+| minimal tool sets | ~1k per tool not granted |
+| own system prompt (tool-less agents) | ~8.5k per agent, and improves the answer |
+| own system prompt (read-only agents) | ~25% of total tokens, n=1 |
 | deterministic digest | reading the repo to decide how to split it |
 | module-scoped context packs | everything outside one domain |
 | sleeping swarms + compression | the entire cost of idle modules |

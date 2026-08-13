@@ -170,6 +170,9 @@ export class ClaudeCodeLocalRuntime implements AgentRuntime {
       args.push('--session-id', spec.sessionId ?? randomUUID());
     }
 
+    // --system-prompt replaces the default; --append-system-prompt extends it.
+    // They are not mutually exclusive: an override plus a charter is valid.
+    if (spec.systemPromptOverride) args.push('--system-prompt', spec.systemPromptOverride);
     if (spec.systemPrompt) args.push('--append-system-prompt', spec.systemPrompt);
 
     for (const dir of spec.addDirs ?? []) args.push('--add-dir', dir);

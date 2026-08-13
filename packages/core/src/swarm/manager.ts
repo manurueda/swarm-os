@@ -12,6 +12,7 @@
 
 import type { AgentRuntime, ModuleSpec, SwarmEvent, SwarmRecord } from '../types.js';
 import { collectAgent } from '../runtime/collect.js';
+import { standaloneSystemPrompt } from '../runtime/system-tier.js';
 import { estimateTokens, Workspace } from '../workspace/store.js';
 
 /**
@@ -173,7 +174,8 @@ export async function sleepSwarm(options: {
       role: 'compressor',
       module: slug,
       prompt,
-      systemPrompt: COMPRESSOR_CHARTER,
+      // The compressor returns markdown, not a structured payload.
+      systemPromptOverride: standaloneSystemPrompt(COMPRESSOR_CHARTER, { structured: false }),
       cwd: workspace.repoRoot,
       tools: [],
       ...(options.model ? { model: options.model } : {}),

@@ -13,3 +13,4 @@ credentials.json
 .swarm/missions/*/events.jsonl
 
 .DS_Store
+.swarm/
