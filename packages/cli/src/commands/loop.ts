@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import {
   runLoop,
   tasksFromSignals,
-  isWorkingTreeClean,
+  isWorkingTreeCleanIgnoringSwarm,
   type LoopProgress,
   type LoopResult,
 } from '@swarm-os/core';
@@ -28,7 +28,7 @@ export async function loopCommand(args: ParsedArgs): Promise<number> {
 
   const dryRun = flagBool(args.flags, 'dry-run');
 
-  if (!dryRun && !(await isWorkingTreeClean(workspace.repoRoot))) {
+  if (!dryRun && !(await isWorkingTreeCleanIgnoringSwarm(workspace.repoRoot))) {
     throw new UserError(
       'the working tree has uncommitted changes.\n' +
         'A loop runs for hours and merges as it goes — commit or stash first.',

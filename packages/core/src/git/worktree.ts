@@ -49,6 +49,24 @@ export async function isWorkingTreeClean(repoRoot: string): Promise<boolean> {
   return res.ok && res.stdout.trim() === '';
 }
 
+/**
+ * Clean, disregarding Swarm OS's own files.
+ *
+ * A loop cannot require a spotless tree and then dirty it itself on the first
+ * mission. Changes under `.swarm/` are the tool's bookkeeping and never the
+ * user's work, so they do not count — which also keeps this working on a repo
+ * that committed those files before they were ignored.
+ */
+export async function isWorkingTreeCleanIgnoringSwarm(repoRoot: string): Promise<boolean> {
+  const res = await git(repoRoot, ['status', '--porcelain']);
+  if (!res.ok) return false;
+  return res.stdout
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .every((line) => line.slice(2).trim().replace(/^"|"$/g, '').startsWith('.swarm/'));
+}
+
 export interface WorktreeHandle {
   path: string;
   branch: string;
@@ -58,23 +76,52 @@ export interface WorktreeHandle {
   linked?: string[];
 }
 
-/** Make sure worktrees are invisible to the parent repo's status. */
-export async function ensureWorktreeIgnore(repoRoot: string, worktreeRoot: string): Promise<void> {
-  // `.swarm/worktrees` is the default; keep the ignore file next to it.
+/**
+ * Keep Swarm OS's own bookkeeping out of the repository's status.
+ *
+ * `.swarm/` holds two different kinds of thing. The module map, each module's
+ * memory and the config are shared knowledge — they belong in version control,
+ * and a colleague cloning the repo should get them. Mission records, swarm
+ * state, logs, generated views and agent worktrees are per-run and per-machine.
+ *
+ * Committing the second kind is not merely untidy: a mission writes its own
+ * record while it runs, so the tool dirties the working tree of the repository
+ * it is working on. An autonomous loop then fails its own clean-tree check on
+ * the second round, having caused the problem itself.
+ */
+export async function ensureSwarmIgnore(repoRoot: string, worktreeRoot: string): Promise<void> {
   const swarmDir = join(repoRoot, '.swarm');
   await mkdir(swarmDir, { recursive: true });
-  const ignorePath = join(swarmDir, '.gitignore');
   const rel = worktreeRoot.replace(/^\.swarm\//, '');
   const body = [
-    '# Agent worktrees are disposable checkouts, never committed.',
+    '# Written by Swarm OS. Everything here is per-run or per-machine.',
+    '# The module map, memories and config are NOT ignored — they are shared.',
+    '',
+    '# Disposable checkouts, one per agent per mission.',
     `${rel}/`,
     '',
-    '# Raw event logs can get large; mission.json carries the durable summary.',
-    'missions/*/events.jsonl',
+    '# Records of individual runs.',
+    'missions/',
+    'loop.log',
+    'loop.json',
+    '',
+    '# Local swarm state and fingerprints — specific to this checkout.',
+    'state.json',
+    '',
+    '# Generated on demand.',
+    'view.html',
+    'REFACTOR.md',
+    'refactor.json',
+    'archive/',
     '',
   ].join('\n');
-  if (!existsSync(ignorePath)) await writeFile(ignorePath, body, 'utf8');
+  // Rewritten rather than preserved: an older, narrower version is exactly the
+  // problem this fixes.
+  await writeFile(join(swarmDir, '.gitignore'), body, 'utf8');
 }
+
+/** @deprecated Use {@link ensureSwarmIgnore}. */
+export const ensureWorktreeIgnore = ensureSwarmIgnore;
 
 /**
  * Create (or reuse) a worktree on its own branch.
@@ -123,7 +170,7 @@ export async function createWorktree(options: {
   const { repoRoot, worktreeRoot, name, branch } = options;
   const path = join(repoRoot, worktreeRoot, name);
 
-  await ensureWorktreeIgnore(repoRoot, worktreeRoot);
+  await ensureSwarmIgnore(repoRoot, worktreeRoot);
   await mkdir(join(repoRoot, worktreeRoot), { recursive: true });
 
   if (existsSync(join(path, '.git'))) {

@@ -124,6 +124,8 @@ export {
   isGitRepo,
   currentBranch,
   isWorkingTreeClean,
+  isWorkingTreeCleanIgnoringSwarm,
+  ensureSwarmIgnore,
   createWorktree,
   linkDependencies,
   removeWorktree,

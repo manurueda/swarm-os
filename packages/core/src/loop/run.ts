@@ -33,7 +33,7 @@ import { buildImportGraph } from '../architecture/import-graph.js';
 import { computeSignals, type Signal } from '../architecture/signals.js';
 import { estimateTokens } from '../workspace/store.js';
 import { runMission, type MissionModuleResult } from '../mission/run.js';
-import { git, currentBranch, isWorkingTreeClean } from '../git/worktree.js';
+import { git, currentBranch, isWorkingTreeCleanIgnoringSwarm } from '../git/worktree.js';
 
 export interface LoopTask {
   /** Stable identity, so a failure is not retried in the same run. */
@@ -182,7 +182,7 @@ export async function runLoop(options: RunLoopOptions): Promise<LoopResult> {
 
   // A dirty tree means uncommitted work that a mission's worktree would branch
   // away from and a merge could later bury.
-  if (!(await isWorkingTreeClean(workspace.repoRoot))) {
+  if (!(await isWorkingTreeCleanIgnoringSwarm(workspace.repoRoot))) {
     return finish('dirty-tree', '', []);
   }
 
