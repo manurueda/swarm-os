@@ -40,6 +40,8 @@ import {
   isGitRepo,
 } from '../git/worktree.js';
 import { renderPlan, routeMission } from './route.js';
+import { buildDigest } from '../mapper/digest.js';
+import { isOwned } from '../swarm/ownership.js';
 
 export const WORK_REPORT_SCHEMA = {
   type: 'object',
@@ -317,6 +319,9 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
 
   const specBySlug = new Map(allModules.map((m) => [m.slug, m]));
 
+  // One walk of the repository, shared by every agent's context pack.
+  const digest = await buildDigest(workspace.repoRoot);
+
   const tasks = plan.assignments.map((assignment) => async (): Promise<MissionModuleResult> => {
     const spec = specBySlug.get(assignment.module);
     if (!spec) {
@@ -358,7 +363,10 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
       }
     }
 
-    const pack = await buildContextPack(workspace, spec);
+    const pack = await buildContextPack(workspace, spec, {
+      files: digest.files.filter((f) => isOwned(f, spec.owns)),
+      codeStyle: config.codeStyle,
+    });
 
     const prompt = [
       pack.text,

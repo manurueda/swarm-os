@@ -18,7 +18,12 @@ import { DEFAULT_CONFIG, parseConfig, serializeConfig, type SwarmConfig } from '
 export const SWARM_DIR = '.swarm';
 
 /** Files that live inside a module's directory. */
-export type ModuleFile = 'module.md' | 'memory.md' | 'decisions.md' | 'verification.md';
+export type ModuleFile =
+  | 'module.md'
+  | 'memory.md'
+  | 'decisions.md'
+  | 'verification.md'
+  | 'conventions.md';
 
 /** Cheap token estimate. Good enough for budgeting memory files. */
 export function estimateTokens(text: string): number {

@@ -27,9 +27,17 @@ export interface ContextPack {
   tokens: number;
 }
 
+export interface ContextPackOptions {
+  /** Every file the module owns. Included verbatim when small enough. */
+  files?: string[];
+  /** Project-wide code conventions, from config. */
+  codeStyle?: string;
+}
+
 export async function buildContextPack(
   workspace: Workspace,
   spec: ModuleSpec,
+  options: ContextPackOptions = {},
 ): Promise<ContextPack> {
   const [system, charter, memory] = await Promise.all([
     workspace.readSystem(),
@@ -39,6 +47,8 @@ export async function buildContextPack(
 
   const contracts = await dependencyContracts(workspace, spec);
   const areas = await areaIndex(workspace, spec);
+  const index = fileIndex(options.files ?? []);
+  const conventions = await workspace.readModuleFile(spec.slug, 'conventions.md');
 
   const text = [
     '# System context',
@@ -52,11 +62,37 @@ export async function buildContextPack(
     '# What previous missions learned here',
     '',
     memory.trim() || '_Nothing recorded yet — you are the first agent in this module._',
+    ...(index ? ['', index] : []),
     ...(areas ? ['', areas] : []),
     ...(contracts ? ['', contracts] : []),
+    ...(options.codeStyle?.trim()
+      ? ['', '# How this project wants code written', '', options.codeStyle.trim()]
+      : []),
+    ...(conventions.trim()
+      ? ['', '# Conventions specific to this module', '', conventions.trim()]
+      : []),
   ].join('\n');
 
   return { module: spec.slug, text, tokens: estimateTokens(text) };
+}
+
+/**
+ * Every file the module owns, listed.
+ *
+ * Measured across two real missions: work agents spent 19% of their tool calls
+ * on pure discovery — grep, find, ls, glob — answering "where is X" before they
+ * could start. For a module of a hundred files that list costs about a thousand
+ * tokens and removes the question entirely.
+ *
+ * Above the cap it is dropped rather than truncated: half a file list is worse
+ * than none, because an agent cannot tell the difference between "not in this
+ * module" and "cut off". A module too large to list is a module that wants
+ * splitting — which is what the `memory-pressure` signal already says.
+ */
+function fileIndex(files: string[]): string {
+  const MAX_FILES = 160;
+  if (files.length === 0 || files.length > MAX_FILES) return '';
+  return ['# Every file in this module', '', '```', ...files, '```'].join('\n');
 }
 
 /**

@@ -43,6 +43,17 @@ export interface SwarmConfig {
    * subprocess by default. Add one explicitly if a build genuinely needs it.
    */
   worktreeLinks: string[];
+  /**
+   * How this project wants code written, in your words.
+   *
+   * Handed to every work agent on top of its standing charter. Put project
+   * taste here — file size, layering, testing style — not universal advice the
+   * charter already carries.
+   *
+   * A single module can override or extend this with a `conventions.md` in its
+   * own directory under `.swarm/modules/<slug>/`.
+   */
+  codeStyle: string;
   /** Built-in tools work agents may use. */
   tools: string[];
   /** Pause spawning when the subscription rate limit reports this status. */
@@ -66,6 +77,7 @@ export const DEFAULT_CONFIG: SwarmConfig = {
     'target',
     '.gradle',
   ],
+  codeStyle: '',
   tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
   pauseOnRateLimitStatus: ['rejected', 'blocked'],
 };
