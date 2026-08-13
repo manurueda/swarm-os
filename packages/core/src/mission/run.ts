@@ -11,7 +11,7 @@
  * running processes.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type {
   AgentRuntime,
@@ -222,6 +222,15 @@ export interface RunMissionOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * A mission's identity: date, a readable slug, and a hash of the whole goal.
+ *
+ * The slug alone is not enough. An autonomous loop generates goals that differ
+ * only in their tail — "Split the oversized files in this module. Start with
+ * X" versus "…Start with Y" — and six words of slug is identical for both. Two
+ * missions then share a directory and overwrite each other's plan, report and
+ * event log, so the record of what happened is whatever finished last.
+ */
 export function missionId(goal: string, now = new Date()): string {
   const date = now.toISOString().slice(0, 10);
   const slug =
@@ -232,7 +241,8 @@ export function missionId(goal: string, now = new Date()): string {
       .split('-')
       .slice(0, 6)
       .join('-') || 'mission';
-  return `${date}-${slug}`;
+  const fingerprint = createHash('sha256').update(goal).digest('hex').slice(0, 6);
+  return `${date}-${slug}-${fingerprint}`;
 }
 
 export async function runMission(options: RunMissionOptions): Promise<MissionResult> {
