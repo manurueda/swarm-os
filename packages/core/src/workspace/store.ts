@@ -371,6 +371,19 @@ export class Workspace {
     await writeFile(join(dir, 'mission.json'), `${JSON.stringify(record, null, 2)}\n`, 'utf8');
   }
 
+  /**
+   * Clear a mission's event log before it starts.
+   *
+   * Ids are derived from the goal, so the same task run twice lands in the same
+   * directory — which is useful for finding it, and ruinous for the record if
+   * the log merely accumulates. Reading one back then shows agents from two
+   * different runs interleaved, and a reviewer that "ran" when it did not.
+   */
+  async resetMissionLog(id: string): Promise<void> {
+    await mkdir(this.missionDir(id), { recursive: true });
+    await writeFile(join(this.missionDir(id), 'events.jsonl'), '', 'utf8');
+  }
+
   async readMission(id: string): Promise<MissionRecord | undefined> {
     try {
       const raw: unknown = JSON.parse(await readFile(join(this.missionDir(id), 'mission.json'), 'utf8'));

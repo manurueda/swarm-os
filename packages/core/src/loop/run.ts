@@ -313,7 +313,7 @@ export async function runLoop(options: RunLoopOptions): Promise<LoopResult> {
       report({ phase: 'verify', message: config.verifyCommand, task });
       for (const result of usable) {
         const passed = result.worktree
-          ? await runVerify(result.worktree, config.verifyCommand)
+          ? await runVerify(result.worktree, config.verifyCommand, config.verifyEnv)
           : false;
         if (!passed) {
           attempt.verified = false;
@@ -395,12 +395,47 @@ async function survey(workspace: Workspace, config: SwarmConfig): Promise<Signal
   }).signals;
 }
 
-async function runVerify(repoRoot: string, command: string): Promise<boolean> {
+/**
+ * Run the verify command inside a worktree.
+ *
+ * The environment matters as much as the command. A worktree is a bare
+ * checkout and a project's installed tooling still points at the original
+ * clone, so without help the verification runs against the wrong source or
+ * fails to resolve it at all. Both look like the change is broken when it is
+ * not — and an unattended loop then throws away work that was correct.
+ *
+ * Observed: a mission split a 1,712-line module into a clean package, the
+ * reviewer approved it, and the gate rejected it with 246 collection errors
+ * that were entirely an artefact of the worktree. With PYTHONPATH pointed at
+ * the worktree's own sources the same branch passed the whole suite.
+ */
+async function runVerify(
+  worktree: string,
+  command: string,
+  extraEnv: Record<string, string> = {},
+): Promise<boolean> {
   const { spawn } = await import('node:child_process');
+  const { existsSync } = await import('node:fs');
+  const { join, isAbsolute } = await import('node:path');
+
+  const env: NodeJS.ProcessEnv = { ...process.env };
+
+  // PYTHONPATH precedes site-packages, so pointing it at the worktree's own
+  // sources shadows an editable install pointing at the original clone.
+  if (existsSync(join(worktree, 'src')) && existsSync(join(worktree, 'pyproject.toml'))) {
+    const own = join(worktree, 'src');
+    env['PYTHONPATH'] = env['PYTHONPATH'] ? `${own}:${env['PYTHONPATH']}` : own;
+  }
+
+  for (const [key, value] of Object.entries(extraEnv)) {
+    env[key] = isAbsolute(value) ? value : join(worktree, value);
+  }
+
   return new Promise((resolve) => {
     const child = spawn(command, {
-      cwd: repoRoot,
+      cwd: worktree,
       shell: true,
+      env,
       stdio: 'ignore',
       // A hung build must not hold a five-hour run hostage.
       timeout: 15 * 60_000,

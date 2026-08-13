@@ -71,6 +71,22 @@ export interface SwarmConfig {
    * Empty means changes are kept on the reviewer's word alone.
    */
   verifyCommand: string;
+  /**
+   * Environment for the verify command. Relative values resolve against the
+   * worktree being verified.
+   *
+   * This exists because a worktree is not automatically a working environment.
+   * A Python project installed with `pip install -e .` has a path file in its
+   * venv pointing at the ORIGINAL checkout, so inside a worktree `import
+   * yourpackage` resolves to the original source while pytest collects the
+   * worktree's files — every test errors with "import file mismatch", and the
+   * gate can never pass no matter how good the change is.
+   *
+   * `PYTHONPATH` is set automatically for a Python project with a `src/`
+   * directory, because PYTHONPATH precedes site-packages and so shadows the
+   * editable install. Anything here overrides that.
+   */
+  verifyEnv: Record<string, string>;
   /** Built-in tools work agents may use. */
   tools: string[];
   /** Pause spawning when the subscription rate limit reports this status. */
@@ -97,6 +113,7 @@ export const DEFAULT_CONFIG: SwarmConfig = {
   codeStyle: '',
   contextFileIndex: 160,
   verifyCommand: '',
+  verifyEnv: {},
   tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
   pauseOnRateLimitStatus: ['rejected', 'blocked'],
 };

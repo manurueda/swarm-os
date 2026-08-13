@@ -255,6 +255,10 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
     throw new Error('this project has no module map — run `swarm map` first');
   }
 
+  // Same goal, same id, same directory — so the previous run's log must go
+  // before this one starts appending to it.
+  await workspace.resetMissionLog(id);
+
   const log = async (event: SwarmEvent): Promise<void> => {
     scheduler.observe(event);
     await workspace.logEvent(id, event);
