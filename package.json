@@ -1,0 +1,23 @@
+{
+  "name": "swarm-os-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/cli"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --build packages/core packages/cli",
+    "clean": "tsc --build --clean packages/core packages/cli && rm -rf packages/*/dist",
+    "watch": "tsc --build --watch packages/core packages/cli",
+    "swarm": "node packages/cli/dist/main.js",
+    "link": "npm run build && npm link -w @swarm-os/cli"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

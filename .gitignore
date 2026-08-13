@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Never commit credentials. Swarm OS itself stores none — auth is delegated
+# entirely to `claude auth` (macOS Keychain) — but keep the door shut anyway.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+.swarm/missions/*/events.jsonl
+
+.DS_Store

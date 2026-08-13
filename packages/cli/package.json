@@ -1,0 +1,14 @@
+{
+  "name": "@swarm-os/cli",
+  "version": "0.1.0",
+  "description": "Swarm OS — run coding agents as sleeping, per-module swarms so large repos stop breaking context limits.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "swarm": "./dist/main.js"
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "@swarm-os/core": "0.1.0"
+  }
+}
