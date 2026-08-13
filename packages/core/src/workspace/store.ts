@@ -7,7 +7,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, writeFile, appendFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile, appendFile, rm, rename } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 
 import { parse, stringify } from 'yaml';
@@ -165,6 +165,44 @@ export class Workspace {
       const path = join(dir, file);
       if (!existsSync(path)) await writeFile(path, seed, 'utf8');
     }
+  }
+
+  /**
+   * Move module directories that are no longer in the map out of the way.
+   *
+   * Repartitioning changes the set of slugs. Leaving the old directories behind
+   * corrupts the workspace silently — `listModules()` returns both maps at once,
+   * ownership overlaps everywhere, and the UI shows modules that no longer
+   * exist. Deleting them would destroy accumulated memory, which is the one
+   * thing here that cost real tokens to produce. So they are archived.
+   *
+   * Returns the slugs that were moved.
+   */
+  async archiveModulesNotIn(keep: string[], label: string): Promise<string[]> {
+    const dir = join(this.root, 'modules');
+    let present: string[];
+    try {
+      present = (await readdir(dir, { withFileTypes: true }))
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name);
+    } catch {
+      return [];
+    }
+
+    const keepSet = new Set(keep);
+    const stale = present.filter((slug) => !keepSet.has(slug));
+    if (stale.length === 0) return [];
+
+    const target = join(this.root, 'archive', label);
+    await mkdir(target, { recursive: true });
+    for (const slug of stale) {
+      await rename(join(dir, slug), join(target, slug)).catch(async () => {
+        // A name collision from a second repartition on the same day.
+        await rm(join(target, slug), { recursive: true, force: true });
+        await rename(join(dir, slug), join(target, slug));
+      });
+    }
+    return stale;
   }
 
   async readModuleFile(slug: string, file: ModuleFile): Promise<string> {

@@ -160,6 +160,13 @@ async function printMapResult(workspace: Workspace, result: MapResult): Promise<
     line();
   }
 
+  if (result.archived.length > 0) {
+    note(`  archived ${result.archived.length} module(s) no longer in the map:`);
+    note(`    ${result.archived.join(', ')}`);
+    note(`    their memory is preserved under .swarm/archive/`);
+    line();
+  }
+
   const analysed = result.modules.filter((m) => m.status === 'analysed').length;
   const reused = result.modules.filter((m) => m.status === 'reused').length;
 

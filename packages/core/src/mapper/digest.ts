@@ -27,6 +27,8 @@ export interface RepoDigest {
   languages: Array<[string, number]>;
   /** Indented directory tree with per-directory file counts. */
   tree: string;
+  /** Full path list, populated only for small repositories. */
+  sourceFiles: string[];
   /** Headings lifted from existing architecture docs. */
   docs: Array<{ path: string; headings: string[] }>;
   /** Project manifests found at the root. */
@@ -34,6 +36,9 @@ export interface RepoDigest {
   /** Stable fingerprint of the file list, to detect drift after mapping. */
   hash: string;
 }
+
+/** Under this many tracked files, send real paths instead of aggregates. */
+const SMALL_REPO_FILES = 400;
 
 const DOC_CANDIDATES = [
   'README.md',
@@ -237,6 +242,13 @@ export async function buildDigest(repoRoot: string): Promise<RepoDigest> {
 
   const tree = renderTree(buildTree(files), { maxLines: 140, minCount: 3 });
 
+  // Below this size the whole file list costs less than the tree and removes
+  // all guesswork about what actually exists.
+  const sourceFiles =
+    files.length <= SMALL_REPO_FILES
+      ? files.filter((f) => !/\.(png|jpg|jpeg|gif|svg|ico|woff2?|ttf|mp4|mp3|wav|pdf|lock)$/i.test(f))
+      : [];
+
   const docs: RepoDigest['docs'] = [];
   for (const candidate of DOC_CANDIDATES) {
     const headings = await readHeadings(repoRoot, candidate);
@@ -252,7 +264,17 @@ export async function buildDigest(repoRoot: string): Promise<RepoDigest> {
   const hash = createHash('sha256').update(files.join('\n')).digest('hex').slice(0, 16);
   const repoName = repoRoot.slice(repoRoot.lastIndexOf('/') + 1);
 
-  return { repoName, files, totalFiles: files.length, languages, tree, docs, manifests, hash };
+  return {
+    repoName,
+    files,
+    sourceFiles,
+    totalFiles: files.length,
+    languages,
+    tree,
+    docs,
+    manifests,
+    hash,
+  };
 }
 
 /** Render the digest as the compact markdown the mapper agent receives. */
@@ -265,10 +287,17 @@ export function renderDigest(digest: RepoDigest): string {
   parts.push('## File types');
   parts.push(digest.languages.map(([ext, n]) => `${ext}: ${n}`).join(', '));
   parts.push('');
-  parts.push('## Directory tree (file counts in parentheses)');
-  parts.push('```');
-  parts.push(digest.tree);
-  parts.push('```');
+  if (digest.sourceFiles.length > 0) {
+    parts.push('## Every file');
+    parts.push('```');
+    parts.push(digest.sourceFiles.join('\n'));
+    parts.push('```');
+  } else {
+    parts.push('## Directory tree (file counts in parentheses)');
+    parts.push('```');
+    parts.push(digest.tree);
+    parts.push('```');
+  }
 
   if (digest.manifests.length > 0) {
     parts.push('');

@@ -139,11 +139,66 @@ export async function mapRepository(options: {
     options.signal,
   );
 
-  const parsed = parseModuleMap(outcome.structured);
+  let parsed = parseModuleMap(outcome.structured);
   if (!parsed) {
     throw new Error(
       outcome.error ?? 'mapper did not return a usable module map (no structured output)',
     );
+  }
+
+  // A module owning zero files is useless, and it is detectable for free — so
+  // never accept one. The partitioner sees only structure, so it can invent a
+  // path that does not exist; showing it exactly which globs matched nothing,
+  // alongside the real paths, fixes it in one cheap round.
+  let repair = outcome;
+  const emptyIn = (map: { modules: ModuleSpec[] }): ModuleSpec[] =>
+    map.modules.filter((m) => countFiles(digest, m.owns) === 0);
+
+  const unmatched = emptyIn(parsed);
+  if (unmatched.length > 0) {
+    repair = await collectAgent(
+      options.runtime,
+      {
+        id: 'mapper-repair',
+        role: 'mapper',
+        prompt: [
+          buildMapperPrompt(digest),
+          '',
+          '---',
+          '',
+          '# Your previous answer had modules that own nothing',
+          '',
+          'These globs matched zero files in the repository:',
+          '',
+          ...unmatched.flatMap((m) => [`- \`${m.slug}\``, ...m.owns.map((g) => `    ${g}`)]),
+          '',
+          'Every path you write must exist. The file list above is complete and',
+          'authoritative — do not infer paths from names.',
+          '',
+          'Produce the whole map again, corrected.',
+        ].join('\n'),
+        systemPromptOverride: standaloneSystemPrompt(MAPPER_CHARTER),
+        cwd: options.repoRoot,
+        tools: [],
+        ...(options.model ? { model: options.model } : {}),
+        permissionMode: 'dontAsk',
+        jsonSchema: MODULE_MAP_SCHEMA,
+        lean: true,
+        ephemeral: true,
+      },
+      options.onEvent,
+      options.signal,
+    );
+    const repaired = parseModuleMap(repair.structured);
+    // Only accept the repair if it is actually better.
+    if (repaired && emptyIn(repaired).length < unmatched.length) parsed = repaired;
+  }
+
+  // Whatever survives, drop modules that still own nothing rather than create
+  // an empty directory for them.
+  parsed = { ...parsed, modules: parsed.modules.filter((m) => countFiles(digest, m.owns) > 0) };
+  if (parsed.modules.length === 0) {
+    throw new Error('every proposed module owned zero files — the map is unusable');
   }
 
   // Attach file counts from the digest so `swarm status` can show module sizes
@@ -153,7 +208,7 @@ export async function mapRepository(options: {
     fileCount: countFiles(digest, m.owns),
   }));
 
-  return { system: parsed.system, modules, digest, outcome };
+  return { system: parsed.system, modules, digest, outcome: repair };
 }
 
 function parseModuleMap(

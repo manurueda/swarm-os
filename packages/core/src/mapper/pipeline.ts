@@ -61,6 +61,8 @@ export interface MapResult {
   costUsd: number;
   /** Combined size of every module's memory — the cost of keeping this repo mapped. */
   totalMemoryTokens: number;
+  /** Modules moved to `.swarm/archive/` because the map no longer has them. */
+  archived: string[];
   /** Modules claiming the same files, decided against the real file list. */
   conflicts: OwnershipConflict[];
 }
@@ -139,6 +141,22 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
       phase: 'partition',
       message: `reusing existing map (${modules.length} modules) — pass --repartition to redraw boundaries`,
     });
+  }
+
+  // Repartitioning changes the slug set. Old module directories left behind
+  // would be returned by listModules() alongside the new ones.
+  let archived: string[] = [];
+  if (shouldPartition) {
+    archived = await workspace.archiveModulesNotIn(
+      modules.map((m) => m.slug),
+      new Date().toISOString().slice(0, 10),
+    );
+    if (archived.length > 0) {
+      report({
+        phase: 'partition',
+        message: `archived ${archived.length} module(s) no longer in the map: ${archived.join(', ')}`,
+      });
+    }
   }
 
   // -- 3. Analyse -----------------------------------------------------------
@@ -263,10 +281,17 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
         return;
       }
 
+      // An analyst that corrects its globs changes which files it owns, so the
+      // count computed before it ran is stale. Left uncorrected this reports
+      // modules as owning zero files while they demonstrably own several.
+      const owns = analysis.correctedOwns ?? entry.spec.owns;
+      const ownedNow = filesFor(digest, owns);
+
       const spec: ModuleSpec = {
         ...entry.spec,
         purpose: analysis.purpose || entry.spec.purpose,
-        owns: analysis.correctedOwns ?? entry.spec.owns,
+        owns,
+        fileCount: ownedNow.length,
         entryPoints:
           analysis.entryPoints.length > 0
             ? analysis.entryPoints.map((e) => e.path)
@@ -279,9 +304,10 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
       await workspace.writeModuleFile(spec.slug, 'memory.md', memory);
 
       const memoryTokens = estimateTokens(memory);
-      moduleHashes[spec.slug] = entry.hash;
+      const hash = analysis.correctedOwns ? hashFiles(ownedNow) : entry.hash;
+      moduleHashes[spec.slug] = hash;
       costUsd += outcome.costUsd ?? 0;
-      await recordProgress(spec.slug, entry.hash, memoryTokens);
+      await recordProgress(spec.slug, hash, memoryTokens);
 
       results.set(spec.slug, {
         spec,
@@ -322,6 +348,9 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
     moduleHashes,
     system,
   };
+  for (const slug of Object.keys(nextState.swarms)) {
+    if (!finalModules.some((m) => m.slug === slug)) delete nextState.swarms[slug];
+  }
   // Every module starts asleep. Mapping does not leave processes running.
   for (const spec of finalModules) {
     const current = nextState.swarms[spec.slug];
@@ -349,6 +378,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
     costUsd,
     totalMemoryTokens: ordered.reduce((sum, m) => sum + (m.memoryTokens ?? 0), 0),
     conflicts: findOwnershipConflicts(finalModules, digest.files),
+    archived,
   };
 }
 
