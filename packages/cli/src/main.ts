@@ -9,6 +9,7 @@
  * swarm missions                   past missions
  * swarm memory [module]            what a swarm knows
  * swarm verify [module]            check that memory against the code
+ * swarm refactor [module]          propose structural fixes to the code itself
  * swarm sleep [module]             compress memory, release the swarm
  * swarm wake <module>              mark a swarm active
  * swarm update                     update Swarm OS itself
@@ -22,6 +23,7 @@ import { missionCommand, missionsCommand } from './commands/mission.js';
 import { memoryCommand, statusCommand } from './commands/status.js';
 import { sleepCommand, wakeCommand } from './commands/swarms.js';
 import { verifyCommand } from './commands/verify.js';
+import { refactorCommand } from './commands/refactor.js';
 import { noticeIfUpdated, scheduleBackgroundUpdate, updateCommand } from './commands/update.js';
 import { c, fail, line, note } from './ui.js';
 
@@ -41,6 +43,7 @@ ${c.bold('Commands')}
   missions                  list past missions
   memory [module]           read what a swarm knows
   verify [module]           check the memory is true, not just confident
+  refactor [module]         find where the code's structure is what makes it hard
   sleep [module]            compress memory and release
   wake <module>             mark a swarm active
   update                    update Swarm OS itself
@@ -56,6 +59,7 @@ ${c.bold('Common flags')}
   --repartition             map: redraw module boundaries, keep memory
   --measure                 doctor: measure lean-spawn savings on this machine
   --citations-only          verify: deterministic check only, no agents
+  --signals-only            refactor: deterministic signals only, no agents
   --check                   update: report only, do not apply
 
 ${c.bold('Getting started')}
@@ -101,6 +105,8 @@ async function main(): Promise<number> {
       return memoryCommand(args);
     case 'verify':
       return verifyCommand(args);
+    case 'refactor':
+      return refactorCommand(args);
     case 'update':
       return updateCommand(args);
     case 'sleep':

@@ -86,6 +86,12 @@ export class Workspace {
     await writeFile(join(this.root, 'system.md'), markdown, 'utf8');
   }
 
+  /** Write a top-level report into `.swarm/`, e.g. REFACTOR.md. */
+  async writeSystemFile(name: string, content: string): Promise<void> {
+    await mkdir(this.root, { recursive: true });
+    await writeFile(join(this.root, name), content, 'utf8');
+  }
+
   // -- modules --------------------------------------------------------------
 
   moduleDir(slug: string): string {

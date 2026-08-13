@@ -109,6 +109,7 @@ git diff main..swarm/2026-08-13-timeline-performance/rendering
 | `swarm missions` | past missions |
 | `swarm memory [module]` | read what a swarm knows |
 | `swarm verify [module]` | check the memory is true, not just confident |
+| `swarm refactor [module]` | find where the code's structure is what makes it hard |
 | `swarm sleep [module]` | compress memory and release |
 | `swarm wake <module>` | mark a swarm active |
 | `swarm update` | update Swarm OS itself |
@@ -260,6 +261,60 @@ not confirm it. Documentation-sourced claims are the ones that go stale, and
 they are marked `[doc]` in the memory file so a reader weights them differently.
 
 Reports land in `.swarm/modules/<slug>/verification.md`.
+
+## Is the code itself the problem?
+
+Often a repository is hard to work in for reasons no module boundary will fix:
+files that do too much, directories nobody decided what to call, whole domains
+with no tests. `swarm refactor` finds those and proposes what to do.
+
+```bash
+swarm refactor                 # signals, then a reviewer agent per module
+swarm refactor --signals-only  # deterministic only, instant, zero tokens
+```
+
+The deterministic pass is the interesting half. From the file list, line counts
+and a regex import graph — no model, no toolchain, any language:
+
+```
+✗ scattered-module   `reel-core-video` needs 14 globs across 2 top-level
+                     directories — its code is not colocated
+✗ memory-pressure    `reel-core-audio` holds ~11 sub-domains in a 2000-token
+                     budget — about 190 tokens each
+✗ import-cycle       circular import: reel-products → reel-core-analysis →
+                     reel-core-foundation → … → reel-products
+✗ god-file           `reel-products` has 8 files far larger than the rest
+                     (median 63 lines)
+! unowned-files      270 files (15%) belong to no module
+```
+
+Those signals then become the reviewer's brief. Handing an agent "read this
+500-file module and tell me what's wrong" is the unbounded exploration this tool
+exists to prevent; handing it "here are eleven specific files, three over 1,200
+lines, this directory has no tests — go and confirm" is a bounded job.
+
+Reviewers report `healthy` / `workable` / `needs-restructuring`, and are asked
+to name the **false positives** explicitly — a reviewer that finds problems
+everywhere has prioritised nothing.
+
+### On trusting the signals
+
+Two rules were learned by running this against its own source:
+
+**`dependsOn` is an opinion; imports are a fact.** Dependency signals are built
+only from a real import graph, never from the `dependsOn` an analyst wrote down.
+A cycle warning you cannot act on — because you cannot tell whether the code or
+the opinion is wrong — is worse than no warning.
+
+**Type-only imports and barrel files are excluded.** `import type` is erased at
+compile time, and a barrel's imports describe a public API rather than
+coupling. Counting either invents cycles: on this repo it reported
+`mapper → orchestrator → runtime → mapper`, which turned out to be a shared
+`types.ts` and an `index.ts` re-export, not a cycle at all.
+
+Same reason `core`, `lib` and `shared` are not treated as junk-drawer names —
+they are standard package names, and flagging them fires on healthy code and
+teaches people to ignore the output.
 
 ## Updating
 

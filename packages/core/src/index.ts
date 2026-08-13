@@ -70,6 +70,32 @@ export { checkOwnership, isOwned, matchesGlob, findOwnershipConflicts } from './
 export type { OwnershipReport, OwnershipConflict } from './swarm/ownership.js';
 export { Scheduler } from './swarm/scheduler.js';
 
+// Architecture review
+export { computeSignals } from './architecture/signals.js';
+export type {
+  ArchitectureSignals,
+  Signal,
+  SignalSeverity,
+  ModuleHealth,
+} from './architecture/signals.js';
+export {
+  countLines,
+  directoryShapes,
+  repeatedBasenames,
+  isCodeFile,
+  isTestFile,
+  median,
+} from './architecture/code-stats.js';
+export type { FileStat, DirectoryShape } from './architecture/code-stats.js';
+export { buildImportGraph } from './architecture/import-graph.js';
+export type { ImportGraph, ModuleEdge, ImportEdge } from './architecture/import-graph.js';
+export {
+  reviewModuleStructure,
+  renderRefactorReport,
+  REFACTOR_SCHEMA,
+} from './architecture/refactor.js';
+export type { ModuleRefactorReport, RefactorProposal } from './architecture/refactor.js';
+
 // Missions
 export { routeMission, renderPlan, ROUTE_SCHEMA } from './mission/route.js';
 export { runMission, missionId, WORK_REPORT_SCHEMA } from './mission/run.js';
