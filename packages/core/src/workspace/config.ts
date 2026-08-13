@@ -62,6 +62,15 @@ export interface SwarmConfig {
    * from "cut off".
    */
   contextFileIndex: number;
+  /**
+   * The command that proves the project still works, e.g. `npm test`.
+   *
+   * An unattended loop merges as it goes, and a reviewer's approval is a
+   * judgement while a green build is a fact. Nothing is kept unless this
+   * passes; if it fails the integration branch is reset to where it was.
+   * Empty means changes are kept on the reviewer's word alone.
+   */
+  verifyCommand: string;
   /** Built-in tools work agents may use. */
   tools: string[];
   /** Pause spawning when the subscription rate limit reports this status. */
@@ -87,6 +96,7 @@ export const DEFAULT_CONFIG: SwarmConfig = {
   ],
   codeStyle: '',
   contextFileIndex: 160,
+  verifyCommand: '',
   tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
   pauseOnRateLimitStatus: ['rejected', 'blocked'],
 };

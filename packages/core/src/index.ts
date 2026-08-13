@@ -107,6 +107,8 @@ export { renderUi } from './ui/render.js';
 export { routeMission, renderPlan, ROUTE_SCHEMA } from './mission/route.js';
 export { runMission, missionId, WORK_REPORT_SCHEMA } from './mission/run.js';
 export { reviewModuleChange, REVIEW_SCHEMA } from './mission/review.js';
+export { runLoop, tasksFromSignals } from './loop/run.js';
+export type { LoopTask, LoopResult, LoopAttempt, LoopProgress, LoopStop } from './loop/run.js';
 export type { ModuleReview, ReviewFinding } from './mission/review.js';
 export type {
   MissionResult,

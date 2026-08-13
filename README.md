@@ -334,6 +334,43 @@ produce something plausible rather than admit it does not know. Agents now get
 the published interface of every module they depend on, and the reviewer treats
 anything outside it as invented until proven otherwise.
 
+## Running it unattended
+
+```bash
+swarm loop --plan            # the queue, nothing runs
+swarm loop --hours 5         # fix things until done or out of budget
+```
+
+It surveys, picks the most serious thing wrong, runs a mission for it, verifies
+it, keeps it if it holds, and goes again. Everything about it is shaped by the
+word *unattended*:
+
+- **`main` is never touched.** All work lands on one integration branch created
+  at the start. One branch to review, one branch to delete if the run was a
+  mistake.
+- **Nothing is kept unless `verifyCommand` passes.** Set it in config
+  (`npm test`, `pytest -q`, whatever proves your project works). A reviewer's
+  approval is a judgement; a green build is a fact, and after five hours only
+  facts are worth much.
+- **Verification happens before the merge, never after.** Merge-then-revert
+  would need a `git reset --hard` in your checkout, and that destroys
+  uncommitted work. No unattended process should own an operation that can do
+  that.
+- **It refuses to start on a dirty tree**, for the same reason.
+- **It stops itself** — nothing left, mission budget, time budget, three
+  consecutive failures, or an exhausted quota.
+- **A failed task is not retried in the same run.** Repeating a failure for five
+  hours is the worst possible use of the window.
+
+Only signals with a clear remedy become missions. Import cycles, unowned files
+and ownership conflicts are real problems, but they are decisions about
+boundaries rather than work an isolated agent can carry out — those are left for
+a person. On a 1,742-file repo that split 18 signals into 7 missions and 11
+left alone.
+
+Progress goes to `.swarm/loop.log` and `.swarm/loop.json` as it runs, so closing
+the terminal loses nothing.
+
 ## Review
 
 Every mission is reviewed before you see it, by an agent that did not write the

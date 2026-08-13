@@ -13,6 +13,7 @@
  * swarm refactor [module]          propose structural fixes to the code itself
  * swarm sleep [module]             compress memory, release the swarm
  * swarm wake <module>              mark a swarm active
+ * swarm loop                       keep fixing things unattended
  * swarm update                     update Swarm OS itself
  */
 
@@ -27,6 +28,7 @@ import { sleepCommand, wakeCommand } from './commands/swarms.js';
 import { verifyCommand } from './commands/verify.js';
 import { refactorCommand } from './commands/refactor.js';
 import { uiCommand } from './commands/ui.js';
+import { loopCommand, loopPlanCommand } from './commands/loop.js';
 import { noticeIfUpdated, scheduleBackgroundUpdate, updateCommand } from './commands/update.js';
 import { c, fail, line, note } from './ui.js';
 
@@ -50,6 +52,7 @@ ${c.bold('Commands')}
   refactor [module]         find where the code's structure is what makes it hard
   sleep [module]            compress memory and release
   wake <module>             mark a swarm active
+  loop [--plan]             keep fixing things unattended until done or out of budget
   update                    update Swarm OS itself
 
 ${c.bold('Common flags')}
@@ -67,6 +70,9 @@ ${c.bold('Common flags')}
   --no-review               mission: skip the reviewer (nothing checks the contracts)
   --no-open                 ui: do not open a browser
   --serve                   ui: run it live on 127.0.0.1 and start missions from it
+  --plan                    loop: show the queue without running anything
+  --missions <n>            loop: stop after n missions        (default: 20)
+  --hours <n>               loop: stop after n hours           (default: 5)
   --check                   update: report only, do not apply
 
 ${c.bold('Getting started')}
@@ -80,6 +86,10 @@ ${c.gray('`claude auth login`; agents inherit that. No API keys, ever.')}
 ${c.gray('Updates itself in the background once a day, after a command finishes,')}
 ${c.gray('never during one. Disable with SWARM_NO_UPDATE=1.')}
 `;
+
+function flagBoolArg(args: ReturnType<typeof parseArgs>, name: string): boolean {
+  return args.flags[name] === true || args.flags[name] === 'true';
+}
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
@@ -116,6 +126,8 @@ async function main(): Promise<number> {
       return refactorCommand(args);
     case 'ui':
       return uiCommand(args);
+    case 'loop':
+      return flagBoolArg(args, 'plan') ? loopPlanCommand(args) : loopCommand(args);
     case 'update':
       return updateCommand(args);
     case 'sleep':
