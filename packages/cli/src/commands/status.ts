@@ -25,6 +25,7 @@ export async function statusCommand(args: ParsedArgs): Promise<number> {
   heading('Swarms');
 
   const rows: string[][] = [];
+  const moduleAreas: { slug: string; areas: { name: string; tokens: number }[] }[] = [];
   let awake = 0;
   let totalMemory = 0;
   let totalFiles = 0;
@@ -44,17 +45,33 @@ export async function statusCommand(args: ParsedArgs): Promise<number> {
           ? c.yellow('compressing')
           : c.gray('sleeping');
 
-    const areas = await workspace.listAreas(spec.slug);
+    const areaSlugs = await workspace.listAreas(spec.slug);
+    if (areaSlugs.length > 0) {
+      const areas = await Promise.all(
+        areaSlugs.map(async (name) => ({
+          name,
+          tokens: estimateTokens(await workspace.readAreaFile(spec.slug, name)),
+        })),
+      );
+      moduleAreas.push({ slug: spec.slug, areas });
+    }
     rows.push([
       `${mark} ${c.bold(pad(spec.slug, 20))}`,
       state,
       String(spec.fileCount ?? '—'),
-      formatTokens(record.memoryTokens) + (areas.length > 0 ? c.gray(` +${areas.length}a`) : ''),
+      formatTokens(record.memoryTokens) + (areaSlugs.length > 0 ? c.gray(` +${areaSlugs.length}a`) : ''),
       c.gray(clip(record.lastMission ?? '—', 34)),
     ]);
   }
 
   table(rows, { head: ['  module', 'state', 'files', 'memory', 'last mission'] });
+
+  if (moduleAreas.length > 0) {
+    for (const m of moduleAreas) {
+      const detail = m.areas.map((a) => `${a.name}: ${formatTokens(a.tokens)} tok`).join(', ');
+      note(`    ${c.bold(m.slug)} — ${m.areas.length} areas — ${detail}`);
+    }
+  }
 
   line();
   line(
