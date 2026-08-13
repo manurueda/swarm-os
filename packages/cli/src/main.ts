@@ -5,6 +5,7 @@
  * swarm doctor                     is this machine ready, and on what billing basis
  * swarm map [path]                 understand a repository as modules
  * swarm status                     what exists, what is awake, what it costs
+ * swarm ui                         open a local visual view of the repository
  * swarm mission "<goal>"           put the swarms to work
  * swarm missions                   past missions
  * swarm memory [module]            what a swarm knows
@@ -24,6 +25,7 @@ import { memoryCommand, statusCommand } from './commands/status.js';
 import { sleepCommand, wakeCommand } from './commands/swarms.js';
 import { verifyCommand } from './commands/verify.js';
 import { refactorCommand } from './commands/refactor.js';
+import { uiCommand } from './commands/ui.js';
 import { noticeIfUpdated, scheduleBackgroundUpdate, updateCommand } from './commands/update.js';
 import { c, fail, line, note } from './ui.js';
 
@@ -39,6 +41,7 @@ ${c.bold('Commands')}
   doctor                    check the runtime and confirm subscription billing
   map [path]                understand a repository as modules (incremental)
   status                    swarms, their state, and what they cost
+  ui                        open a local visual view of the repository
   mission "<goal>"          route a goal to modules and run them in parallel
   missions                  list past missions
   memory [module]           read what a swarm knows
@@ -60,6 +63,7 @@ ${c.bold('Common flags')}
   --measure                 doctor: measure lean-spawn savings on this machine
   --citations-only          verify: deterministic check only, no agents
   --signals-only            refactor: deterministic signals only, no agents
+  --no-open                 ui: write the file without opening a browser
   --check                   update: report only, do not apply
 
 ${c.bold('Getting started')}
@@ -107,6 +111,8 @@ async function main(): Promise<number> {
       return verifyCommand(args);
     case 'refactor':
       return refactorCommand(args);
+    case 'ui':
+      return uiCommand(args);
     case 'update':
       return updateCommand(args);
     case 'sleep':

@@ -96,6 +96,11 @@ export {
 } from './architecture/refactor.js';
 export type { ModuleRefactorReport, RefactorProposal } from './architecture/refactor.js';
 
+// Local visual view
+export { buildSnapshot } from './ui/snapshot.js';
+export type { UiSnapshot, ModuleView } from './ui/snapshot.js';
+export { renderUi } from './ui/render.js';
+
 // Missions
 export { routeMission, renderPlan, ROUTE_SCHEMA } from './mission/route.js';
 export { runMission, missionId, WORK_REPORT_SCHEMA } from './mission/run.js';

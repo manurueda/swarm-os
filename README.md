@@ -105,6 +105,7 @@ git diff main..swarm/2026-08-13-timeline-performance/rendering
 | `swarm doctor` | check the runtime, confirm subscription billing |
 | `swarm map [path]` | partition and survey a repository (incremental) |
 | `swarm status` | swarms, state, memory cost, drift |
+| `swarm ui` | a local visual view of the whole repository |
 | `swarm mission "<goal>"` | route a goal and run the modules in parallel |
 | `swarm missions` | past missions |
 | `swarm memory [module]` | read what a swarm knows |
@@ -261,6 +262,39 @@ not confirm it. Documentation-sourced claims are the ones that go stale, and
 they are marked `[doc]` in the memory file so a reader weights them differently.
 
 Reports land in `.swarm/modules/<slug>/verification.md`.
+
+## Seeing it
+
+```bash
+swarm ui
+```
+
+Writes one self-contained HTML file and opens it. No server, no network, no
+build — it works offline, opens straight from disk, and can be committed or
+emailed if you want someone else to see the shape of a codebase.
+
+It answers, by looking:
+
+- **What is in here** — a treemap where area is file count, so the 511-file
+  module is visibly the 511-file module. Cells with room list their heaviest
+  files, which answers the same question one level down.
+- **What is wrong** — signals attached to each module, with the file and line
+  count that triggered them.
+- **What depends on what** — a matrix, row imports column, built from real
+  imports. Cycles show as a filled pair either side of the diagonal.
+- **What each swarm knows** — invariants and gotchas with their citations.
+
+A note on why it is a matrix and not a graph: the first version drew modules on
+a ring with edges as chords, which at 19 edges is an unreadable hairball. The
+matrix made a real finding visible immediately — a 6-module import cycle in a
+1,742-file repository turned out to be caused by **one** import going backwards
+(`reel-core-audio → reel-products`, count 1, against 193 in the other
+direction). A one-line fix that the ring completely hid.
+
+Design rule throughout: no title block restating the tool's name, no subtitle
+restating the title, no paragraph explaining what a section is when its contents
+already say it. A label appears only where the number beside it would otherwise
+be ambiguous.
 
 ## Is the code itself the problem?
 
