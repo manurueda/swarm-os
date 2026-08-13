@@ -25,6 +25,12 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/** One area of a module whose memory is split, with its estimated size. */
+export interface MemoryArea {
+  name: string;
+  tokens: number;
+}
+
 /**
  * `.swarm/state.json`.
  *
@@ -324,12 +330,28 @@ export class Workspace {
     return next;
   }
 
-  /** Swarm record for a module, defaulting to sleeping with its memory cost. */
-  async swarmRecord(slug: string): Promise<SwarmRecord> {
+  /**
+   * Swarm record for a module, defaulting to sleeping with its memory cost.
+   *
+   * When the module's memory is split by area (see `listAreas`), also returns
+   * `memoryAreas`: one entry per area with its own estimated token size, so a
+   * caller can show the breakdown rather than just the module-level total.
+   * Absent for modules with a single, unsplit `memory.md`.
+   */
+  async swarmRecord(slug: string): Promise<SwarmRecord & { memoryAreas?: MemoryArea[] }> {
     const state = await this.readState();
     const record = state.swarms[slug] ?? { module: slug, state: 'sleeping' as const };
     const memory = await this.readModuleFile(slug, 'memory.md');
-    return { ...record, memoryTokens: estimateTokens(memory) };
+    const areas = await this.listAreas(slug);
+    if (areas.length === 0) {
+      return { ...record, memoryTokens: estimateTokens(memory) };
+    }
+    const memoryAreas: MemoryArea[] = [];
+    for (const area of areas) {
+      const text = await this.readAreaFile(slug, area);
+      memoryAreas.push({ name: area, tokens: estimateTokens(text) });
+    }
+    return { ...record, memoryTokens: estimateTokens(memory), memoryAreas };
   }
 
   // -- missions -------------------------------------------------------------
