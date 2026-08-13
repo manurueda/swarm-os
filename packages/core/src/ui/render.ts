@@ -256,7 +256,7 @@ const HUE = { ok: 'var(--sleep)', warn: 'var(--warn)', high: 'var(--high)' };
 let selected = D.modules[0]?.slug ?? null;
 
 /* ---- actionable commands ------------------------------------------------ */
-const missionCmd = (slug) => 'swarm mission ' + slug + ' "<your goal>"';
+const missionCmd = (slug) => 'swarm mission "<your goal>" --modules ' + slug;
 const refactorCmd = (slug) => 'swarm refactor ' + slug;
 const cmdRow = (cmd) => \`<div class="cmd"><code>\${esc(cmd)}</code><button class="copy-btn" type="button" data-cmd="\${esc(cmd)}">Copy</button></div>\`;
 

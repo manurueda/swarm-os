@@ -36,6 +36,8 @@ export async function buildContextPack(
     workspace.readModuleFile(spec.slug, 'memory.md'),
   ]);
 
+  const contracts = await dependencyContracts(workspace, spec);
+
   const text = [
     '# System context',
     '',
@@ -48,9 +50,67 @@ export async function buildContextPack(
     '# What previous missions learned here',
     '',
     memory.trim() || '_Nothing recorded yet — you are the first agent in this module._',
+    ...(contracts ? ['', contracts] : []),
   ].join('\n');
 
   return { module: spec.slug, text, tokens: estimateTokens(text) };
+}
+
+/**
+ * The public interface of the modules this one depends on.
+ *
+ * Isolation has a sharp edge: an agent that cannot see another module will
+ * invent its contract rather than admit it does not know. Observed directly —
+ * an agent generating a CLI command for a sibling module produced
+ * `swarm mission <module> "<goal>"` when the real syntax is
+ * `swarm mission "<goal>" --modules <module>`. It never had the syntax and
+ * guessed plausibly.
+ *
+ * So dependencies contribute their `Public interface` section — and only that
+ * section, a few hundred tokens — to the context pack. Enough to call a
+ * neighbour correctly, nowhere near enough to start working inside it.
+ */
+async function dependencyContracts(
+  workspace: Workspace,
+  spec: ModuleSpec,
+): Promise<string> {
+  if (spec.dependsOn.length === 0) return '';
+
+  const blocks: string[] = [];
+  for (const slug of spec.dependsOn.slice(0, 5)) {
+    if (slug === spec.slug) continue;
+    const memory = await workspace.readModuleFile(slug, 'memory.md');
+    const iface = sectionOf(memory, 'public interface');
+    if (iface) blocks.push(`## \`${slug}\``, '', iface, '');
+  }
+
+  if (blocks.length === 0) return '';
+  return [
+    '# What you may rely on from other modules',
+    '',
+    'You cannot edit these and you cannot see their source. This is their',
+    'published interface — use it exactly as written. If what you need is not',
+    'here, say so in your report rather than guessing at it.',
+    '',
+    ...blocks,
+  ].join('\n');
+}
+
+/** Body of the section whose heading starts with `prefix`, case-insensitive. */
+function sectionOf(markdown: string, prefix: string): string {
+  const lines = markdown.split('\n');
+  const out: string[] = [];
+  let inside = false;
+  for (const raw of lines) {
+    const heading = /^##\s+(.+)$/.exec(raw.trim());
+    if (heading) {
+      if (inside) break;
+      inside = (heading[1] ?? '').toLowerCase().startsWith(prefix);
+      continue;
+    }
+    if (inside && raw.trim()) out.push(raw);
+  }
+  return out.join('\n').trim();
 }
 
 /**
