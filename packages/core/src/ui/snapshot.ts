@@ -44,6 +44,19 @@ export interface ModuleView {
   health: 'ok' | 'warn' | 'high';
 }
 
+/** A single structural-refactor proposal, from `.swarm/REFACTOR.md`. */
+export interface ProposalView {
+  /** Slug of the module this proposal was raised against. */
+  module: string;
+  title: string;
+  problem: string;
+  change: string;
+  evidence: string[];
+  severity: 'high' | 'medium' | 'low';
+  effort: 'hours' | 'days' | 'weeks';
+  risk?: string;
+}
+
 export interface UiSnapshot {
   repoName: string;
   repoRoot: string;
@@ -61,6 +74,8 @@ export interface UiSnapshot {
   cycles: string[][];
   unownedTop: Array<{ dir: string; files: number }>;
   missions: Array<Pick<MissionRecord, 'id' | 'goal' | 'status' | 'modules' | 'createdAt'>>;
+  /** Open structural-refactor proposals, from the last `swarm refactor` run. */
+  proposals: ProposalView[];
   config: { model: string; concurrency: number; runtime: string };
 }
 
@@ -148,6 +163,10 @@ export async function buildSnapshot(
     createdAt: m.createdAt,
   }));
 
+  const moduleSlugs = new Set(specs.map((s) => s.slug));
+  const refactorReport = await workspace.readSystemFile('REFACTOR.md');
+  const proposals = parseRefactorProposals(refactorReport).filter((p) => moduleSlugs.has(p.module));
+
   return {
     repoName: digest.repoName,
     repoRoot: workspace.repoRoot,
@@ -167,6 +186,7 @@ export async function buildSnapshot(
       .slice(0, 8)
       .map(([dir, files]) => ({ dir, files })),
     missions,
+    proposals,
     config: {
       model: config.model,
       concurrency: config.maxConcurrentAgents,
@@ -220,4 +240,84 @@ function splitClaims(memory: string): { invariants: Claim[]; gotchas: Claim[] } 
 
 function stripCitation(line: string): string {
   return line.replace(/\s*<sub>.*?<\/sub>\s*$/, '').trim();
+}
+
+/**
+ * Recovers structured proposals from `.swarm/REFACTOR.md`, the markdown
+ * rendered by `architecture/refactor.ts#renderRefactorReport`. There is no
+ * structured artifact of `swarm refactor`'s output on disk, so the UI reads
+ * back the one thing that is: its own report, in the exact shape that
+ * function writes it in.
+ */
+function parseRefactorProposals(markdown: string): ProposalView[] {
+  const start = markdown.indexOf('## Proposals');
+  if (start === -1) return [];
+  const afterHeading = markdown.slice(start + '## Proposals'.length);
+  const end = afterHeading.search(/\n##\s/);
+  const section = end === -1 ? afterHeading : afterHeading.slice(0, end);
+
+  const proposals: ProposalView[] = [];
+  for (const block of section.split(/\n###\s+/).slice(1)) {
+    const lines = block.split('\n');
+    const title = (lines[0] ?? '').trim();
+    const paragraphs = lines
+      .slice(1)
+      .join('\n')
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    const meta = /^`([^`]+)`\s*·\s*\*\*(high|medium|low)\*\*\s*·\s*(hours|days|weeks)/.exec(
+      paragraphs[0] ?? '',
+    );
+    if (!title || !meta) continue;
+    const module = meta[1] ?? '';
+    const rawSeverity = meta[2];
+    const rawEffort = meta[3];
+    const severity =
+      rawSeverity === 'high' || rawSeverity === 'medium' || rawSeverity === 'low'
+        ? rawSeverity
+        : 'medium';
+    const effort =
+      rawEffort === 'hours' || rawEffort === 'days' || rawEffort === 'weeks' ? rawEffort : 'days';
+
+    let problem = '';
+    let change = '';
+    let risk: string | undefined;
+    let evidence: string[] = [];
+
+    // `renderRefactorReport` puts the "**Evidence.**" label and its bullet
+    // list in separate paragraphs (a blank line sits between them), so the
+    // bullets have to be read off the paragraph that follows the label.
+    let expectEvidence = false;
+    for (const para of paragraphs.slice(1)) {
+      if (expectEvidence) {
+        evidence = para
+          .split('\n')
+          .map((l) => l.replace(/^-\s*/, '').trim())
+          .filter(Boolean);
+        expectEvidence = false;
+      } else if (para.startsWith('**Costs today.**')) {
+        problem = para.slice('**Costs today.**'.length).trim();
+      } else if (para.startsWith('**Change.**')) {
+        change = para.slice('**Change.**'.length).trim();
+      } else if (para.startsWith('**Risk.**')) {
+        risk = para.slice('**Risk.**'.length).trim();
+      } else if (para.trim() === '**Evidence.**') {
+        expectEvidence = true;
+      }
+    }
+
+    proposals.push({
+      module,
+      title,
+      problem,
+      change,
+      evidence,
+      severity,
+      effort,
+      ...(risk ? { risk } : {}),
+    });
+  }
+  return proposals;
 }

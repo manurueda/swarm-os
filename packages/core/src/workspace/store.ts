@@ -92,6 +92,15 @@ export class Workspace {
     await writeFile(join(this.root, name), content, 'utf8');
   }
 
+  /** Read a top-level report from `.swarm/`, e.g. REFACTOR.md. Empty if absent. */
+  async readSystemFile(name: string): Promise<string> {
+    try {
+      return await readFile(join(this.root, name), 'utf8');
+    } catch {
+      return '';
+    }
+  }
+
   // -- modules --------------------------------------------------------------
 
   moduleDir(slug: string): string {

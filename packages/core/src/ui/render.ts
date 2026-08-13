@@ -220,6 +220,29 @@ tr.row.sel td { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent
 .barrow .t { width: 100%; height: 9px; background: var(--line); border-radius: 2px; overflow: hidden; }
 .barrow .t > i { display: block; height: 100%; background: var(--accent); }
 .barrow .v { font-family: var(--mono); font-size: 11px; color: var(--ink-2); text-align: right; }
+
+/* Copyable CLI commands, attached to whatever they act on. */
+.cmd { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.cmd code {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--ink);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
+  padding: 3px 7px; overflow-x: auto; white-space: pre;
+}
+.copy-btn {
+  flex: 0 0 auto; font-family: var(--mono); font-size: 10.5px; cursor: pointer;
+  color: var(--ink-2); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 3px; padding: 3px 8px; transition: color .12s, border-color .12s;
+}
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.copy-btn.copied { color: var(--ok); border-color: var(--ok); }
+
+.proposal { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.proposal:last-child { border-bottom: 0; }
+.proposal .h { font-size: 12.5px; }
+.proposal .k { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); margin-right: 8px; }
+.proposal .eff { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); margin-left: 6px; }
+.proposal .body { color: var(--ink-2); font-size: 12px; margin-top: 3px; }
+.proposal .body div { padding: 1px 0; }
 `;
 
 const SCRIPT = `
@@ -231,6 +254,24 @@ const k = (v) => v >= 1000 ? (v/1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : String
 const HUE = { ok: 'var(--sleep)', warn: 'var(--warn)', high: 'var(--high)' };
 
 let selected = D.modules[0]?.slug ?? null;
+
+/* ---- actionable commands ------------------------------------------------ */
+const missionCmd = (slug) => 'swarm mission ' + slug + ' "<your goal>"';
+const refactorCmd = (slug) => 'swarm refactor ' + slug;
+const cmdRow = (cmd) => \`<div class="cmd"><code>\${esc(cmd)}</code><button class="copy-btn" type="button" data-cmd="\${esc(cmd)}">Copy</button></div>\`;
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.copy-btn');
+  if (!btn) return;
+  const cmd = btn.dataset.cmd ?? '';
+  navigator.clipboard.writeText(cmd).then(() => {
+    const prev = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1200);
+  });
+});
 
 /* ---- squarified treemap ------------------------------------------------ */
 function treemap(items, x, y, w, h) {
@@ -343,6 +384,7 @@ function drawPanel() {
   el.innerHTML = \`
     <h2>\${esc(m.slug)}</h2>
     <p class="purpose">\${esc(m.purpose)}</p>
+    <div class="grp"><div class="lbl">run a mission</div>\${cmdRow(missionCmd(m.slug))}</div>
     <div class="stats">
       <span><i>files</i> \${n(m.files)}</span>
       <span><i>lines</i> \${n(m.lines)}</span>
@@ -420,6 +462,13 @@ function render() {
         </div>
 
         \${D.edges.length ? '<div class="sect"><div class="lbl">imports · row → column</div><div id="graph"></div></div>' : ''}
+
+        \${D.proposals.length ? \`<div class="sect"><div class="lbl">refactor proposals</div>\${
+          D.proposals.map(p => \`<div class="proposal">
+            <div class="h"><span class="sev \${p.severity === 'high' ? 'high' : p.severity === 'medium' ? 'warn' : 'info'}"></span><span class="k">\${esc(p.module)}</span>\${esc(p.title)}<span class="eff">\${esc(p.effort)}</span></div>
+            <div class="body"><div>\${esc(p.problem)}</div><div>→ \${esc(p.change)}</div></div>
+            \${cmdRow(refactorCmd(p.module))}
+          </div>\`).join('')}</div>\` : ''}
 
         \${D.globalSignals.length ? \`<div class="sect"><div class="lbl">repository</div>\${
           D.globalSignals.map(s => \`<div class="sig"><div class="h"><span class="sev \${s.severity}"></span><span class="k">\${esc(s.kind)}</span>\${esc(s.summary)}</div>
