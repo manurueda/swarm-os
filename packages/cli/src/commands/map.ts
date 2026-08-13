@@ -167,6 +167,14 @@ async function printMapResult(workspace: Workspace, result: MapResult): Promise<
     line();
   }
 
+  const split = Object.entries(result.areas);
+  if (split.length > 0) {
+    note(`  ${split.length} module(s) large enough to split their memory by area:`);
+    for (const [slug, n] of split) note(`    ${slug} → ${n} areas`);
+    note('    agents load only the areas their task touches');
+    line();
+  }
+
   const analysed = result.modules.filter((m) => m.status === 'analysed').length;
   const reused = result.modules.filter((m) => m.status === 'reused').length;
 

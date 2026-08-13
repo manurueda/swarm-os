@@ -63,6 +63,7 @@ ${c.bold('Common flags')}
   --measure                 doctor: measure lean-spawn savings on this machine
   --citations-only          verify: deterministic check only, no agents
   --signals-only            refactor: deterministic signals only, no agents
+  --no-review               mission: skip the reviewer (nothing checks the contracts)
   --no-open                 ui: write the file without opening a browser
   --check                   update: report only, do not apply
 

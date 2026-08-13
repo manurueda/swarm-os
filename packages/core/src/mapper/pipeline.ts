@@ -25,6 +25,7 @@ import {
   renderMemory,
   type ModuleAnalysis,
 } from '../swarm/analyst.js';
+import { areaAsModule, detectAreas } from '../swarm/areas.js';
 import { Workspace, estimateTokens } from '../workspace/store.js';
 import type { SwarmConfig } from '../workspace/config.js';
 import { buildDigest, type RepoDigest } from './digest.js';
@@ -63,6 +64,8 @@ export interface MapResult {
   totalMemoryTokens: number;
   /** Modules moved to `.swarm/archive/` because the map no longer has them. */
   archived: string[];
+  /** Module slug -> number of areas its memory was split into. */
+  areas: Record<string, number>;
   /** Modules claiming the same files, decided against the real file list. */
   conflicts: OwnershipConflict[];
 }
@@ -217,6 +220,66 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
 
   const generatedAt = new Date().toISOString().slice(0, 10);
   let costUsd = 0;
+
+  /**
+   * Give an oversized module per-area memory.
+   *
+   * The trigger is the module's memory saturating its budget while covering
+   * several sub-domains — the measured condition where each sub-domain gets
+   * ~170 tokens and an agent loads mostly things it will never touch.
+   */
+  const surveyAreas = async (spec: ModuleSpec, memoryTokens: number): Promise<void> => {
+    if (memoryTokens < config.memoryBudgetTokens * 0.85) {
+      await workspace.pruneAreas(spec.slug, []);
+      return;
+    }
+
+    const areas = detectAreas(spec, digest.files);
+    await workspace.pruneAreas(spec.slug, areas.map((a) => a.slug));
+    if (areas.length === 0) return;
+
+    report({
+      phase: 'analyse',
+      message: `splitting into ${areas.length} areas`,
+      module: spec.slug,
+    });
+
+    const surveys = await scheduler.run(
+      areas.map((area) => async () => {
+        const asModule = areaAsModule(spec, area);
+        const { analysis } = await analyzeModule({
+          runtime,
+          repoRoot: workspace.repoRoot,
+          module: asModule,
+          siblings: areas
+            .filter((a) => a.slug !== area.slug)
+            .map((a) => ({ slug: a.slug, purpose: `the ${a.slug} area (${a.path})` })),
+          systemSummary: spec.purpose,
+          ...(config.systemModel ? { model: config.systemModel } : {}),
+          onEvent: forward,
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+        if (!analysis) throw new Error(`area ${area.slug} returned nothing`);
+        return { area, analysis };
+      }),
+    );
+
+    for (const survey of surveys) {
+      if (survey instanceof Error || !survey) continue;
+      await workspace.writeAreaFile(
+        spec.slug,
+        survey.area.slug,
+        'area.json',
+        `${JSON.stringify(survey.area, null, 2)}\n`,
+      );
+      await workspace.writeAreaFile(
+        spec.slug,
+        survey.area.slug,
+        'memory.md',
+        renderMemory(areaAsModule(spec, survey.area), survey.analysis, generatedAt),
+      );
+    }
+  };
   const moduleHashes: Record<string, string> = { ...previousHashes };
 
   // state.json is a read-modify-write shared by every analyst, so serialize
@@ -379,6 +442,13 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
     totalMemoryTokens: ordered.reduce((sum, m) => sum + (m.memoryTokens ?? 0), 0),
     conflicts: findOwnershipConflicts(finalModules, digest.files),
     archived,
+    areas: Object.fromEntries(
+      await Promise.all(
+        finalModules.map(
+          async (m) => [m.slug, (await workspace.listAreas(m.slug)).length] as const,
+        ),
+      ).then((pairs) => pairs.filter(([, n]) => n > 0)),
+    ),
   };
 }
 

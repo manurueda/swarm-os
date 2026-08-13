@@ -227,6 +227,51 @@ export class Workspace {
     await writeFile(join(this.moduleDir(slug), file), content, 'utf8');
   }
 
+  // -- areas ----------------------------------------------------------------
+
+  areaDir(module: string, area: string): string {
+    return join(this.moduleDir(module), 'areas', area);
+  }
+
+  async listAreas(module: string): Promise<string[]> {
+    try {
+      return (await readdir(join(this.moduleDir(module), 'areas'), { withFileTypes: true }))
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .sort();
+    } catch {
+      return [];
+    }
+  }
+
+  async readAreaFile(module: string, area: string, file = 'memory.md'): Promise<string> {
+    try {
+      return await readFile(join(this.areaDir(module, area), file), 'utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  async writeAreaFile(
+    module: string,
+    area: string,
+    file: string,
+    content: string,
+  ): Promise<void> {
+    await mkdir(this.areaDir(module, area), { recursive: true });
+    await writeFile(join(this.areaDir(module, area), file), content, 'utf8');
+  }
+
+  /** Drop area directories that the current detection no longer produces. */
+  async pruneAreas(module: string, keep: string[]): Promise<void> {
+    const keepSet = new Set(keep);
+    for (const area of await this.listAreas(module)) {
+      if (!keepSet.has(area)) {
+        await rm(this.areaDir(module, area), { recursive: true, force: true });
+      }
+    }
+  }
+
   async appendDecision(slug: string, entry: string): Promise<void> {
     await mkdir(this.moduleDir(slug), { recursive: true });
     await appendFile(join(this.moduleDir(slug), 'decisions.md'), entry, 'utf8');

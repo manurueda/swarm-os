@@ -42,6 +42,8 @@ export interface ModuleView {
   importedBy: Array<{ slug: string; count: number }>;
   /** Worst signal severity affecting this module. */
   health: 'ok' | 'warn' | 'high';
+  /** How many areas this module's memory is split into, if any. */
+  areas: number;
 }
 
 /** A single structural-refactor proposal, from `.swarm/REFACTOR.md`. */
@@ -146,6 +148,7 @@ export async function buildSnapshot(
         .filter((e) => e.to === spec.slug)
         .map((e) => ({ slug: e.from, count: e.count })),
       health: worstSeverity(signals),
+      areas: (await workspace.listAreas(spec.slug)).length,
     });
   }
 
@@ -164,8 +167,12 @@ export async function buildSnapshot(
   }));
 
   const moduleSlugs = new Set(specs.map((s) => s.slug));
-  const refactorReport = await workspace.readSystemFile('REFACTOR.md');
-  const proposals = parseRefactorProposals(refactorReport).filter((p) => moduleSlugs.has(p.module));
+  // Prefer the structured artifact; fall back to parsing the report for
+  // workspaces written before `swarm refactor` persisted JSON.
+  const proposals = (
+    (await readProposalsJson(workspace)) ??
+    parseRefactorProposals(await workspace.readSystemFile('REFACTOR.md'))
+  ).filter((p) => moduleSlugs.has(p.module));
 
   return {
     repoName: digest.repoName,
@@ -240,6 +247,49 @@ function splitClaims(memory: string): { invariants: Claim[]; gotchas: Claim[] } 
 
 function stripCitation(line: string): string {
   return line.replace(/\s*<sub>.*?<\/sub>\s*$/, '').trim();
+}
+
+/** Structured proposals, when `swarm refactor` has been run since this landed. */
+async function readProposalsJson(workspace: Workspace): Promise<ProposalView[] | undefined> {
+  const raw = await workspace.readSystemFile('refactor.json');
+  if (!raw.trim()) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    const modules = (parsed as Record<string, unknown>)['modules'];
+    if (!Array.isArray(modules)) return undefined;
+    return modules.flatMap((m) => {
+      if (typeof m !== 'object' || m === null) return [];
+      const r = m as Record<string, unknown>;
+      const slug = typeof r['module'] === 'string' ? r['module'] : '';
+      const list = Array.isArray(r['proposals']) ? r['proposals'] : [];
+      return list.flatMap((p) => {
+        if (typeof p !== 'object' || p === null) return [];
+        const q = p as Record<string, unknown>;
+        if (typeof q['title'] !== 'string') return [];
+        return [
+          {
+            module: slug,
+            title: q['title'],
+            problem: typeof q['problem'] === 'string' ? q['problem'] : '',
+            change: typeof q['change'] === 'string' ? q['change'] : '',
+            evidence: Array.isArray(q['evidence'])
+              ? q['evidence'].filter((e): e is string => typeof e === 'string')
+              : [],
+            severity: (q['severity'] === 'high' || q['severity'] === 'low'
+              ? q['severity']
+              : 'medium') as ProposalView['severity'],
+            effort: (q['effort'] === 'hours' || q['effort'] === 'weeks'
+              ? q['effort']
+              : 'days') as ProposalView['effort'],
+            ...(typeof q['risk'] === 'string' ? { risk: q['risk'] } : {}),
+          },
+        ];
+      });
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 /**

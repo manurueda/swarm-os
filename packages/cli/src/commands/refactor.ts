@@ -188,6 +188,21 @@ export async function refactorCommand(args: ParsedArgs): Promise<number> {
     }
   }
 
+  // Persist the structured form too. Re-parsing rendered markdown to recover
+  // data you already had is fragile, and the UI was doing exactly that.
+  await workspace.writeSystemFile(
+    'refactor.json',
+    `${JSON.stringify(
+      {
+        generatedAt: new Date().toISOString(),
+        modules: reports,
+        signals: analysis.signals,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
   await workspace.writeSystemFile(
     'REFACTOR.md',
     renderRefactorReport(

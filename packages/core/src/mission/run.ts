@@ -22,7 +22,8 @@ import type {
   SwarmEvent,
 } from '../types.js';
 import { collectAgent } from '../runtime/collect.js';
-import { buildContextPack, sleepSwarm, wakeSwarm } from '../swarm/manager.js';
+import { buildContextPack, dependencyContracts, sleepSwarm, wakeSwarm } from '../swarm/manager.js';
+import { reviewModuleChange, type ModuleReview } from './review.js';
 import { checkOwnership } from '../swarm/ownership.js';
 import { Scheduler } from '../swarm/scheduler.js';
 import { Workspace } from '../workspace/store.js';
@@ -33,6 +34,7 @@ import {
   createWorktree,
   currentBranch,
   diffStat,
+  fullDiff,
   isGitRepo,
 } from '../git/worktree.js';
 import { renderPlan, routeMission } from './route.js';
@@ -104,20 +106,54 @@ cannot see them and they cannot see you.
 Your working directory is a dedicated git worktree. Edit freely — nothing you do
 here touches the developer's checkout until the mission is reviewed.
 
-Boundaries:
+## Boundaries
+
 - You may modify files matching your module's globs. Nothing else.
 - If the task genuinely requires changing another module, do NOT reach across.
   Finish what you can, and report it as a follow-up with the exact change needed.
   Your diff is checked against your globs afterwards and violations are flagged.
-- Read outside your module only when you must understand a contract you consume.
+- Read outside your module only to understand a contract you consume. You were
+  given the published interface of every module you depend on. Use it exactly as
+  written. If what you need is not there, say so in your report — do NOT invent
+  a signature, a flag or an option name that looks plausible. That specific
+  failure has happened, it compiles, and it survives review unless someone
+  catches it.
 
-Method:
-- Your memory file records what previous agents learned here. Trust it, but if
-  you find it wrong, say so — it will be corrected when you finish.
-- Verify your work. Run the tests or the command that proves it. If you cannot
-  verify, say exactly that rather than implying success.
-- Report honestly. "partial" and "blocked" are useful answers; a confident
-  "complete" that is not complete costs the next mission far more than it saves.
+## How to write the code
+
+Tests first, where tests exist. Write the failing test, make it pass, then
+tidy. If the module has no test setup at all, say so plainly in your report and
+verify another way — do not invent a test harness the project has not chosen.
+
+One reason to change. A function or class that would need editing for two
+unrelated reasons is two things wearing one name. Split it. Name things for what
+they mean to a caller, not for how they work inside.
+
+Duplication is cheaper than the wrong abstraction. Two similar blocks are fine;
+extract on the third, when you can see what actually varies. An abstraction
+invented from two examples usually encodes a coincidence, and unpicking it later
+costs more than the duplication ever did.
+
+Build only what the task asks for. No configuration nobody sets, no extension
+point nobody extends, no parameter with one caller passing one value. If you
+think something will be needed later, put it in follow-ups, not in the code.
+
+Never refactor and change behaviour in the same step. Do one, confirm it still
+works, then do the other. A diff that reorganises and alters at once cannot be
+reviewed, and cannot be bisected when it breaks.
+
+Small steps that keep working. Prefer five changes that each leave the code
+running to one change that leaves it broken in the middle.
+
+Match what is already there. Its conventions, its error handling, its level of
+comment. Being locally consistent matters more than being globally right.
+
+## Reporting
+
+Verify your work. Run the tests or the command that proves it. If you cannot
+verify, say exactly that rather than implying success — "partial" and "blocked"
+are useful answers, and a confident "complete" that is not complete costs the
+next mission far more than it saves.
 
 When you finish, report what you did and — importantly — what you LEARNED about
 this module that was not already in its memory. That is what makes the next
@@ -125,7 +161,7 @@ mission cheaper.`;
 }
 
 export interface MissionProgress {
-  phase: 'preflight' | 'route' | 'spawn' | 'work' | 'harvest' | 'sleep' | 'done';
+  phase: 'preflight' | 'route' | 'spawn' | 'work' | 'review' | 'harvest' | 'sleep' | 'done';
   message: string;
   module?: string;
 }
@@ -139,6 +175,7 @@ export interface MissionModuleResult {
   changedFiles: string[];
   ownershipViolations: string[];
   diffStat?: string;
+  review?: ModuleReview;
   committed?: boolean;
   contextTokens?: number;
   costUsd?: number;
@@ -167,6 +204,8 @@ export interface RunMissionOptions {
   keepWorktrees?: boolean;
   /** Skip the memory-compression step (faster, but the swarms learn nothing). */
   skipCompress?: boolean;
+  /** Skip review. Faster, and nothing checks the contracts the author guessed. */
+  skipReview?: boolean;
   onProgress?: (progress: MissionProgress) => void;
   onEvent?: (event: SwarmEvent) => void | Promise<void>;
   signal?: AbortSignal;
@@ -366,6 +405,38 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
     const ownership = checkOwnership(changed, spec.owns);
     const stat = repoIsGit ? await diffStat(worktreePath, base) : '';
 
+    // Review before commit: the author cannot check its own cross-module
+    // guesses, and this is the only step that can.
+    let review: ModuleReview | undefined;
+    if (repoIsGit && changed.length > 0 && !options.skipReview) {
+      report({ phase: 'review', message: 'reviewing', module: spec.slug });
+      try {
+        review = await reviewModuleChange({
+          runtime,
+          module: spec,
+          cwd: worktreePath,
+          goal,
+          task: assignment.task,
+          diff: await fullDiff(worktreePath, base),
+          ...(workReport
+            ? {
+                authorReport: [
+                  workReport.summary,
+                  ...(workReport.verification ? [`Verification: ${workReport.verification}`] : []),
+                ].join('\n'),
+              }
+            : {}),
+          contracts: await dependencyContracts(workspace, spec),
+          ownershipViolations: ownership.violations,
+          ...(config.systemModel ? { model: config.systemModel } : {}),
+          onEvent: log,
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+      } catch {
+        // A failed review must not lose the work.
+      }
+    }
+
     let committed = false;
     if (repoIsGit && changed.length > 0) {
       const commit = await commitAll(
@@ -383,13 +454,17 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
 
     return {
       module: spec.slug,
-      ok: outcome.ok && workReport?.status !== 'blocked',
+      ok:
+        outcome.ok &&
+        workReport?.status !== 'blocked' &&
+        review?.verdict !== 'reject',
       ...(workReport ? { report: workReport } : {}),
       worktree: worktreePath,
       ...(branch ? { branch } : {}),
       changedFiles: changed,
       ownershipViolations: ownership.violations,
       ...(stat ? { diffStat: stat } : {}),
+      ...(review ? { review } : {}),
       committed,
       ...(outcome.usage ? { contextTokens: outcome.usage.contextTokens } : {}),
       ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
@@ -538,6 +613,13 @@ function renderModuleReport(goal: string, result: MissionModuleResult): string {
     ...(result.changedFiles.length > 0
       ? ['', 'Files changed:', ...result.changedFiles.slice(0, 40).map((f) => `- ${f}`)]
       : []),
+    ...(result.review && result.review.findings.length > 0
+      ? [
+          '',
+          `Review verdict: ${result.review.verdict}`,
+          ...result.review.findings.map((f) => `- ${f.severity}: ${f.file} — ${f.problem}`),
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -560,6 +642,18 @@ function renderMissionReport(
 
     if (r.report?.summary) lines.push(r.report.summary, '');
     if (r.report?.verification) lines.push(`**Verification.** ${r.report.verification}`, '');
+
+    if (r.review) {
+      lines.push(`**Review: ${r.review.verdict}.** ${r.review.summary}`, '');
+      if (r.review.verificationHolds === false) {
+        lines.push('> The reviewer could not confirm the author\'s verification claim.', '');
+      }
+      for (const f of r.review.findings) {
+        lines.push(`- **${f.severity}** \`${f.file}\` — ${f.problem}`);
+        if (f.fix) lines.push(`  - ${f.fix}`);
+      }
+      if (r.review.findings.length > 0) lines.push('');
+    }
 
     if (r.ownershipViolations.length > 0) {
       lines.push('**Ownership violations** — files changed outside this module:', '');

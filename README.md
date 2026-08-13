@@ -269,32 +269,60 @@ Reports land in `.swarm/modules/<slug>/verification.md`.
 swarm ui
 ```
 
-Writes one self-contained HTML file and opens it. No server, no network, no
-build — it works offline, opens straight from disk, and can be committed or
-emailed if you want someone else to see the shape of a codebase.
+One self-contained HTML file, opened. No server, no network, no build — it
+works offline and opens straight from disk.
 
-It answers, by looking:
+Three tabs, and the first one is the point:
 
-- **What is in here** — a treemap where area is file count, so the 511-file
-  module is visibly the 511-file module. Cells with room list their heaviest
-  files, which answers the same question one level down.
-- **What is wrong** — signals attached to each module, with the file and line
-  count that triggered them.
-- **What depends on what** — a matrix, row imports column, built from real
-  imports. Cycles show as a filled pair either side of the diagonal.
-- **What each swarm knows** — invariants and gotchas with their citations.
+- **Tasks** — everything worth doing, most serious first. Each card says what
+  is wrong, where, and carries the one command that acts on it. Refactor
+  proposals rank above raw signals, because an agent read the code for those.
+- **Modules** — what is in here. A name, a size bar, and a flag if something
+  needs attention. Click one for its invariants, its gotchas and its heaviest
+  files.
+- **Missions** — what has run.
 
-A note on why it is a matrix and not a graph: the first version drew modules on
-a ring with edges as chords, which at 19 edges is an unreadable hairball. The
-matrix made a real finding visible immediately — a 6-module import cycle in a
-1,742-file repository turned out to be caused by **one** import going backwards
-(`reel-core-audio → reel-products`, count 1, against 193 in the other
-direction). A one-line fix that the ring completely hid.
+An earlier version was a treemap, a dependency matrix and a wall of statistics.
+All true, all interesting, and none of it told anyone what to do next. The
+primary object is a task now, not a module.
 
-Design rule throughout: no title block restating the tool's name, no subtitle
-restating the title, no paragraph explaining what a section is when its contents
-already say it. A label appears only where the number beside it would otherwise
-be ambiguous.
+## The code agents write
+
+Charters, not hope. Work agents are told, and reviewers check:
+
+- **Tests first where tests exist.** If a module has no test setup, say so
+  rather than inventing a harness the project never chose.
+- **One reason to change.** A function that needs editing for two unrelated
+  reasons is two things wearing one name.
+- **Duplication is cheaper than the wrong abstraction.** Two similar blocks are
+  fine; extract on the third, when you can see what actually varies.
+- **Build only what was asked.** No option nobody sets, no extension point
+  nobody extends, no parameter with one caller passing one value.
+- **Never refactor and change behaviour in the same step.** A diff that
+  reorganises and alters at once cannot be reviewed or bisected.
+- **Match what is already there.** Local consistency beats global correctness.
+
+And one that came from watching this fail: **never invent a neighbour's
+interface**. An isolated agent that needs another module's signature will
+produce something plausible rather than admit it does not know. Agents now get
+the published interface of every module they depend on, and the reviewer treats
+anything outside it as invented until proven otherwise.
+
+## Review
+
+Every mission is reviewed before you see it, by an agent that did not write the
+change and reads only the diff, the task, and the contracts of neighbouring
+modules. It checks the things the author structurally could not:
+
+```
+✓ workspace-state  approve
+! cli              changes-needed
+    major  packages/cli/src/commands/ui.ts:41
+      calls buildSnapshot with two arguments; it takes three
+```
+
+Verdicts are advisory — work lands on a branch either way. `--no-review` skips
+it, and then nothing checks the contracts the author guessed at.
 
 ## Is the code itself the problem?
 

@@ -69,6 +69,8 @@ export type { ContextPack, SleepResult } from './swarm/manager.js';
 export { checkOwnership, isOwned, matchesGlob, findOwnershipConflicts } from './swarm/ownership.js';
 export type { OwnershipReport, OwnershipConflict } from './swarm/ownership.js';
 export { Scheduler } from './swarm/scheduler.js';
+export { detectAreas, areaAsModule, renderAreaIndex } from './swarm/areas.js';
+export type { AreaSpec } from './swarm/areas.js';
 
 // Architecture review
 export { computeSignals } from './architecture/signals.js';
@@ -104,6 +106,8 @@ export { renderUi } from './ui/render.js';
 // Missions
 export { routeMission, renderPlan, ROUTE_SCHEMA } from './mission/route.js';
 export { runMission, missionId, WORK_REPORT_SCHEMA } from './mission/run.js';
+export { reviewModuleChange, REVIEW_SCHEMA } from './mission/review.js';
+export type { ModuleReview, ReviewFinding } from './mission/review.js';
 export type {
   MissionResult,
   MissionModuleResult,
@@ -123,6 +127,7 @@ export {
   pruneWorktrees,
   changedFiles,
   diffStat,
+  fullDiff,
   commitAll,
 } from './git/worktree.js';
 export type { WorktreeHandle } from './git/worktree.js';

@@ -14,6 +14,7 @@ import type { AgentRuntime, ModuleSpec, SwarmEvent, SwarmRecord } from '../types
 import { collectAgent } from '../runtime/collect.js';
 import { standaloneSystemPrompt } from '../runtime/system-tier.js';
 import { estimateTokens, Workspace } from '../workspace/store.js';
+import { renderAreaIndex, type AreaSpec } from './areas.js';
 
 /**
  * The context an agent receives when it wakes into a module: the system's
@@ -37,6 +38,7 @@ export async function buildContextPack(
   ]);
 
   const contracts = await dependencyContracts(workspace, spec);
+  const areas = await areaIndex(workspace, spec);
 
   const text = [
     '# System context',
@@ -50,10 +52,34 @@ export async function buildContextPack(
     '# What previous missions learned here',
     '',
     memory.trim() || '_Nothing recorded yet — you are the first agent in this module._',
+    ...(areas ? ['', areas] : []),
     ...(contracts ? ['', contracts] : []),
   ].join('\n');
 
   return { module: spec.slug, text, tokens: estimateTokens(text) };
+}
+
+/**
+ * The area index for a module, if it has been split.
+ *
+ * Only the index — paths and file counts. Loading every area's memory here
+ * would rebuild the exact problem areas exist to solve.
+ */
+async function areaIndex(workspace: Workspace, spec: ModuleSpec): Promise<string> {
+  const slugs = await workspace.listAreas(spec.slug);
+  if (slugs.length === 0) return '';
+
+  const areas: AreaSpec[] = [];
+  for (const slug of slugs) {
+    const meta = await workspace.readAreaFile(spec.slug, slug, 'area.json');
+    try {
+      const parsed: unknown = JSON.parse(meta);
+      if (typeof parsed === 'object' && parsed !== null) areas.push(parsed as AreaSpec);
+    } catch {
+      /* an area without metadata is skipped rather than guessed at */
+    }
+  }
+  return renderAreaIndex(spec.slug, areas);
 }
 
 /**
@@ -70,7 +96,7 @@ export async function buildContextPack(
  * section, a few hundred tokens — to the context pack. Enough to call a
  * neighbour correctly, nowhere near enough to start working inside it.
  */
-async function dependencyContracts(
+export async function dependencyContracts(
   workspace: Workspace,
   spec: ModuleSpec,
 ): Promise<string> {

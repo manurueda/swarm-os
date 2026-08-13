@@ -135,6 +135,15 @@ export async function diffStat(worktreePath: string, base: string): Promise<stri
   return res.ok ? res.stdout.trim() : '';
 }
 
+/** Full unified diff of a worktree against its base, including new files. */
+export async function fullDiff(worktreePath: string, base: string): Promise<string> {
+  // Staging untracked files first is what makes them appear in the diff at all;
+  // a review that cannot see newly added files is close to useless.
+  await git(worktreePath, ['add', '-AN']);
+  const res = await git(worktreePath, ['diff', base]);
+  return res.ok ? res.stdout : '';
+}
+
 export async function commitAll(
   worktreePath: string,
   message: string,

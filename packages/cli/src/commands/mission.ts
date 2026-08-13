@@ -100,6 +100,8 @@ export async function missionCommand(args: ParsedArgs): Promise<number> {
           state: finished ? (p.message === 'failed' || p.message === 'blocked' ? 'failed' : 'done') : 'working',
           activity: finished ? p.message : 'working…',
         });
+      } else if (p.phase === 'review') {
+        rows.set(p.module, { ...existing, activity: 'under review…' });
       } else if (p.phase === 'sleep') {
         rows.set(p.module, { ...existing, activity: 'compressing memory…' });
       }
@@ -148,6 +150,7 @@ export async function missionCommand(args: ParsedArgs): Promise<number> {
       dryRun,
       keepWorktrees: flagBool(args.flags, 'keep-worktrees'),
       skipCompress: flagBool(args.flags, 'no-compress'),
+      skipReview: flagBool(args.flags, 'no-review'),
       onProgress,
       onEvent,
     });
@@ -183,6 +186,35 @@ export async function missionCommand(args: ParsedArgs): Promise<number> {
   // -- results --------------------------------------------------------------
   heading('Results');
   printResults(result.modules);
+
+  // The review is the part worth reading first — it checked what the author
+  // structurally could not.
+  const reviewed = result.modules.filter((m) => m.review);
+  if (reviewed.length > 0) {
+    line();
+    for (const m of reviewed) {
+      const r = m.review;
+      if (!r) continue;
+      const mark =
+        r.verdict === 'approve'
+          ? c.green(symbols.ok)
+          : r.verdict === 'reject'
+            ? c.red(symbols.fail)
+            : c.yellow(symbols.warn);
+      line(`  ${mark} ${c.bold(m.module)} ${c.gray(r.verdict)}`);
+      if (r.summary) note(`     ${clip(r.summary, 92)}`);
+      if (r.verificationHolds === false) {
+        note(`     ${c.yellow('the author\'s verification claim could not be confirmed')}`);
+      }
+      for (const f of r.findings.slice(0, 5)) {
+        const sev =
+          f.severity === 'blocker' ? c.red('blocker') : f.severity === 'major' ? c.yellow('major') : c.gray('minor');
+        note(`     ${sev} ${c.gray(f.file)}`);
+        note(`       ${clip(f.problem, 90)}`);
+      }
+      line();
+    }
+  }
 
   const violations = result.modules.flatMap((m) =>
     m.ownershipViolations.map((f) => `${m.module} → ${f}`),

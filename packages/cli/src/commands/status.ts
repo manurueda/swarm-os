@@ -44,11 +44,12 @@ export async function statusCommand(args: ParsedArgs): Promise<number> {
           ? c.yellow('compressing')
           : c.gray('sleeping');
 
+    const areas = await workspace.listAreas(spec.slug);
     rows.push([
       `${mark} ${c.bold(pad(spec.slug, 20))}`,
       state,
       String(spec.fileCount ?? '—'),
-      formatTokens(record.memoryTokens),
+      formatTokens(record.memoryTokens) + (areas.length > 0 ? c.gray(` +${areas.length}a`) : ''),
       c.gray(clip(record.lastMission ?? '—', 34)),
     ]);
   }
