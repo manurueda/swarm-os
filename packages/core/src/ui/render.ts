@@ -226,7 +226,7 @@ tr.row.sel td { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent
 .cmd code {
   flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--ink);
   background: var(--bg); border: 1px solid var(--line); border-radius: 3px;
-  padding: 3px 7px; overflow-x: auto; white-space: pre;
+  padding: 3px 7px; white-space: pre-wrap; word-break: break-all;
 }
 .copy-btn {
   flex: 0 0 auto; font-family: var(--mono); font-size: 10.5px; cursor: pointer;
