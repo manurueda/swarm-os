@@ -12,13 +12,35 @@ import { join } from 'node:path';
 
 import { buildSnapshot, renderUi } from '@swarm-os/core';
 
+import { serve } from '../server.js';
+
 import { flagBool, flagString, type ParsedArgs } from '../args.js';
 import { loadContext } from '../context.js';
 import { heading, line, note, ok, table } from '../ui.js';
 
 export async function uiCommand(args: ParsedArgs): Promise<number> {
-  // No agents here — everything shown is computed from disk.
-  const { workspace, config } = await loadContext(args, { requireMapped: true });
+  const { workspace, runtime, config } = await loadContext(args, { requireMapped: true });
+
+  // Served: the page follows a running mission and can start one.
+  // Written: a static snapshot, which is all you need to look and think.
+  if (flagBool(args.flags, 'serve')) {
+    const port = Number(flagString(args.flags, 'port') ?? 0);
+    const { url } = await serve({
+      workspace,
+      runtime,
+      config,
+      ...(Number.isFinite(port) && port > 0 ? { port } : {}),
+      open: !flagBool(args.flags, 'no-open'),
+    });
+    heading('Live');
+    ok(url);
+    note('  starts missions and follows them as they run');
+    note('  bound to 127.0.0.1 · Ctrl-C to stop');
+    line();
+    // Hold the process open for the server.
+    await new Promise<void>(() => {});
+    return 0;
+  }
 
   heading('Building view');
   const snapshot = await buildSnapshot(workspace, config);

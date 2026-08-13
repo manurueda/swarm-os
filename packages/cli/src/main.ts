@@ -42,7 +42,7 @@ ${c.bold('Commands')}
   doctor                    check the runtime and confirm subscription billing
   map [path]                understand a repository as modules (incremental)
   status                    swarms, their state, and what they cost
-  ui                        open a local visual view of the repository
+  ui [--serve]              a local view of the repository; --serve runs missions from it
   mission "<goal>"          route a goal to modules and run them in parallel
   missions                  list past missions
   memory [module]           read what a swarm knows
@@ -65,7 +65,8 @@ ${c.bold('Common flags')}
   --citations-only          verify: deterministic check only, no agents
   --signals-only            refactor: deterministic signals only, no agents
   --no-review               mission: skip the reviewer (nothing checks the contracts)
-  --no-open                 ui: write the file without opening a browser
+  --no-open                 ui: do not open a browser
+  --serve                   ui: run it live on 127.0.0.1 and start missions from it
   --check                   update: report only, do not apply
 
 ${c.bold('Getting started')}

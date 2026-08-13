@@ -196,6 +196,37 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 2px 7px;
 }
 
+/* Live mode. Present only when the page is served rather than opened from
+   disk, so the same file works both ways. */
+.launch { display: flex; gap: 7px; margin-bottom: 18px; }
+.launch input {
+  flex: 1; font: inherit; font-size: 13.5px; color: var(--fg);
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 12px;
+}
+.launch input:focus { outline: none; border-color: var(--accent); }
+.launch button {
+  font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
+  background: var(--fg); color: var(--bg); border: 0; border-radius: 8px; padding: 9px 16px;
+}
+.launch button:disabled { opacity: .4; cursor: default; }
+
+.running {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px 16px; margin-bottom: 8px;
+}
+.running > h2 { font-size: 14px; font-weight: 550; margin: 0 0 10px; }
+.agent { display: grid; grid-template-columns: 130px 1fr 56px; gap: 12px; align-items: center; padding: 5px 0; }
+.agent .who { font-family: var(--mono); font-size: 12px; }
+.agent .doing { font-family: var(--mono); font-size: 11.5px; color: var(--fg-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent .tok { font-family: var(--mono); font-size: 11px; color: var(--fg-passive); text-align: right; }
+.agent .pip { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); margin-right: 7px; animation: breathe 1.4s ease-in-out infinite; }
+.agent.done .pip { background: var(--ok); animation: none; }
+.agent.failed .pip, .agent.blocked .pip { background: var(--high); animation: none; }
+@keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
 .empty { text-align: center; color: var(--fg-passive); padding: 60px 0; font-size: 13.5px; }
 .empty b { display: block; color: var(--fg-muted); font-size: 15px; margin-bottom: 5px; font-weight: 500; }
 `;
@@ -329,6 +360,8 @@ function humanise(s, slug) {
 /* ---- views -------------------------------------------------------------- */
 let tab = 'tasks';
 let open = null;
+const LIVE = window.__SWARM__ ?? null;   /* set only when served */
+let live = { running: false, agents: {} };
 
 const taskCard = (t) => \`
   <div class="task">
@@ -388,6 +421,28 @@ const moduleRow = (m, max) => {
   \${open === m.slug ? moduleDetail(m) : ''}\`;
 };
 
+const launcher = () => LIVE ? \`
+  <div class="launch">
+    <input id="goal" placeholder="What do you want changed?" \${live.running ? 'disabled' : ''}>
+    <button id="go" \${live.running ? 'disabled' : ''}>\${live.running ? 'Running\u2026' : 'Start mission'}</button>
+  </div>\` : '';
+
+const runningPanel = () => {
+  const names = Object.keys(live.agents);
+  if (!live.running && !names.length) return '';
+  return \`<div class="running">
+    <h2>\${esc(live.goal ?? 'Mission')}</h2>
+    \${names.map(m => {
+      const a = live.agents[m];
+      const cls = ['complete','partial','finished'].includes(a.state) ? 'done'
+                : ['failed','blocked'].includes(a.state) ? 'failed' : '';
+      return \`<div class="agent \${cls}"><span class="who"><span class="pip"></span>\${esc(m)}</span>
+        <span class="doing">\${esc(a.activity || a.state)}</span>
+        <span class="tok">\${a.tokens ? Math.round(a.tokens/1000)+'k' : ''}</span></div>\`;
+    }).join('')}
+  </div>\`;
+};
+
 function body() {
   if (tab === 'tasks') {
     const tasks = buildTasks();
@@ -423,7 +478,7 @@ function render() {
       <button data-tab="modules"  aria-selected="\${tab === 'modules'}">Modules<span class="n">\${D.modules.length}</span></button>
       <button data-tab="missions" aria-selected="\${tab === 'missions'}">Missions<span class="n">\${D.missions.length}</span></button>
     </nav>
-    <main>\${body()}</main>\`;
+    <main>\${launcher()}\${runningPanel()}\${body()}</main>\`;
 
   document.querySelectorAll('nav button').forEach(b => {
     b.onclick = () => { tab = b.dataset.tab; open = null; render(); };
@@ -431,6 +486,41 @@ function render() {
   document.querySelectorAll('.mod').forEach(el => {
     el.onclick = () => { open = open === el.dataset.slug ? null : el.dataset.slug; render(); };
   });
+
+  const go = document.getElementById('go');
+  if (go) {
+    const input = document.getElementById('goal');
+    const start = () => {
+      const goal = input.value.trim();
+      if (!goal) return;
+      go.disabled = true;
+      fetch('/api/mission', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-swarm-token': LIVE.token },
+        body: JSON.stringify({ goal, modules: open ? [open] : undefined }),
+      }).catch(() => { go.disabled = false; });
+    };
+    go.onclick = start;
+    input.onkeydown = (e) => { if (e.key === 'Enter') start(); };
+  }
+}
+
+/* When served, the page follows the mission instead of describing a moment. */
+if (LIVE) {
+  const es = new EventSource('/api/events');
+  es.onmessage = (e) => {
+    const next = JSON.parse(e.data);
+    const justFinished = live.running && !next.running;
+    live = next;
+    render();
+    // A finished mission changes the repository, so the facts are stale.
+    if (justFinished) {
+      fetch('/api/snapshot').then(r => r.json()).then(s => {
+        Object.assign(D, s);
+        render();
+      }).catch(() => {});
+    }
+  };
 }
 
 document.addEventListener('click', (e) => {

@@ -54,6 +54,14 @@ export interface SwarmConfig {
    * own directory under `.swarm/modules/<slug>/`.
    */
   codeStyle: string;
+  /**
+   * Largest module file list to include in a context pack. 0 disables it.
+   *
+   * Above this the index is dropped rather than truncated — half a file list is
+   * worse than none, because an agent cannot distinguish "not in this module"
+   * from "cut off".
+   */
+  contextFileIndex: number;
   /** Built-in tools work agents may use. */
   tools: string[];
   /** Pause spawning when the subscription rate limit reports this status. */
@@ -78,6 +86,7 @@ export const DEFAULT_CONFIG: SwarmConfig = {
     '.gradle',
   ],
   codeStyle: '',
+  contextFileIndex: 160,
   tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
   pauseOnRateLimitStatus: ['rejected', 'blocked'],
 };

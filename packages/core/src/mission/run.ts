@@ -366,6 +366,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
     const pack = await buildContextPack(workspace, spec, {
       files: digest.files.filter((f) => isOwned(f, spec.owns)),
       codeStyle: config.codeStyle,
+      maxIndexFiles: config.contextFileIndex,
     });
 
     const prompt = [

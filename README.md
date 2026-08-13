@@ -207,6 +207,25 @@ Everything below it is stable.
 
 Two things fall out of that table:
 
+### What did not work
+
+The context pack carries the module's file list when it is small enough, on the
+reasoning that agents spent 19% of their tool calls on discovery. Measured
+head to head on a 13-file module, same task both ways:
+
+| | tool calls | wall clock | peak context |
+| --- | --- | --- | --- |
+| without the index | 38 | 174s | 52,497 |
+| with the index | 36 | 146s | 50,452 |
+
+A 5% difference on a single run, which is noise. The honest reading is that on a
+13-file module there was nothing to discover — the agent issued one `Grep` in
+the whole run. Whatever the index is worth, it is not worth it there, and on a
+module large enough to need it the list is dropped for being too large.
+
+It stays because it costs about a hundred tokens and does no harm, but it is not
+the lever. The lever is smaller modules, where there is less to explore at all.
+
 **Tool definitions cost about 1k each.** Not just a JSON schema — each ships a
 long description with usage rules and edge cases. Six work tools cost ~8k.
 
@@ -266,7 +285,8 @@ Reports land in `.swarm/modules/<slug>/verification.md`.
 ## Seeing it
 
 ```bash
-swarm ui
+swarm ui            # a static file you can open, commit, or send
+swarm ui --serve    # the same page, live: starts missions and follows them
 ```
 
 One self-contained HTML file, opened. No server, no network, no build — it
@@ -281,6 +301,12 @@ Three tabs, and the first one is the point:
   needs attention. Click one for its invariants, its gotchas and its heaviest
   files.
 - **Missions** — what has run.
+
+Served with `--serve` the page grows a mission launcher and follows agents as
+they work — which module is doing what, right now, and how much context each
+has used. Bound to 127.0.0.1, one mission at a time, and every mutating request
+carries a token in a custom header that a page you happen to be visiting cannot
+set without a preflight this server refuses.
 
 An earlier version was a treemap, a dependency matrix and a wall of statistics.
 All true, all interesting, and none of it told anyone what to do next. The

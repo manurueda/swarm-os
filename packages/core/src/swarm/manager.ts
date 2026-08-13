@@ -32,6 +32,8 @@ export interface ContextPackOptions {
   files?: string[];
   /** Project-wide code conventions, from config. */
   codeStyle?: string;
+  /** Largest list worth including. 0 disables the index. */
+  maxIndexFiles?: number;
 }
 
 export async function buildContextPack(
@@ -47,7 +49,7 @@ export async function buildContextPack(
 
   const contracts = await dependencyContracts(workspace, spec);
   const areas = await areaIndex(workspace, spec);
-  const index = fileIndex(options.files ?? []);
+  const index = fileIndex(options.files ?? [], options.maxIndexFiles ?? 160);
   const conventions = await workspace.readModuleFile(spec.slug, 'conventions.md');
 
   const text = [
@@ -89,9 +91,8 @@ export async function buildContextPack(
  * module" and "cut off". A module too large to list is a module that wants
  * splitting — which is what the `memory-pressure` signal already says.
  */
-function fileIndex(files: string[]): string {
-  const MAX_FILES = 160;
-  if (files.length === 0 || files.length > MAX_FILES) return '';
+function fileIndex(files: string[], maxFiles: number): string {
+  if (maxFiles <= 0 || files.length === 0 || files.length > maxFiles) return '';
   return ['# Every file in this module', '', '```', ...files, '```'].join('\n');
 }
 
