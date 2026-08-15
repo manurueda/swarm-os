@@ -312,19 +312,26 @@ export async function detectDrift(workspace: Workspace): Promise<{
   }
 
   const digest = await buildDigest(workspace.repoRoot);
-  const unanalysed = modules.filter((m) => (state.moduleHashes ?? {})[m.slug] === undefined);
 
-  if (digest.hash === state.digestHash && unanalysed.length === 0) {
-    return {
-      drifted: false,
-      changedModules: [],
-      ...(state.mappedAt ? { mappedAt: state.mappedAt } : {}),
-    };
+  if (digest.hash === state.digestHash) {
+    const unanalysed = modules.filter((m) => (state.moduleHashes ?? {})[m.slug] === undefined);
+    return unanalysed.length > 0
+      ? {
+          drifted: true,
+          changedModules: unanalysed.map((m) => m.slug),
+          ...(state.mappedAt ? { mappedAt: state.mappedAt } : {}),
+        }
+      : {
+          drifted: false,
+          changedModules: [],
+          ...(state.mappedAt ? { mappedAt: state.mappedAt } : {}),
+        };
   }
 
   const previous = state.moduleHashes ?? {};
-  // A module with no recorded hash was never successfully analysed — it needs
-  // work regardless of whether anything in the repository moved.
+  // The whole-repo digest can move for reasons no module owns (e.g. .swarm/
+  // itself is tracked and the map rewrites it on every run). A module is only
+  // drift if its own files moved, or it was never successfully analysed.
   const changed = modules
     .filter(
       (m) =>
@@ -334,7 +341,7 @@ export async function detectDrift(workspace: Workspace): Promise<{
     .map((m) => m.slug);
 
   return {
-    drifted: true,
+    drifted: changed.length > 0,
     changedModules: changed,
     ...(state.mappedAt ? { mappedAt: state.mappedAt } : {}),
   };
