@@ -24,8 +24,8 @@
 import type { SwarmEvent } from '../types.js';
 import { findOwnershipConflicts } from '../swarm/ownership.js';
 import { Scheduler } from '../swarm/scheduler.js';
-import { detectAreas, planAreas } from '../swarm/areas.js';
-import { Workspace, estimateTokens } from '../workspace/store.js';
+import { detectAreas } from '../swarm/areas.js';
+import { Workspace } from '../workspace/store.js';
 import type { SwarmConfig } from '../workspace/config.js';
 import { buildDigest } from './digest.js';
 import { areasWithMemory } from './pipeline/areas-with-memory.js';
@@ -50,32 +50,26 @@ import type { MapModuleResult, MapProgress, MapProjectOptions, MapResult } from 
 export type { MapPhase, MapProgress, MapModuleResult, MapResult, MapProjectOptions } from './pipeline/types.js';
 
 /**
- * Modules whose memory has outgrown what every agent should have to load, and
- * which have not been split by area yet.
+ * Modules with real structural sub-domains (`detectAreas` finds enough of
+ * them) that have not all been surveyed into per-area memory yet.
  *
  * `swarm map` stops at "already mapped and unchanged" when the file
- * fingerprints match. But memory grows from missions, not from files, so a
- * module can cross its load budget without a single file changing — and the one
- * command able to split it would then decline to run on exactly the repositories
- * that need it. Deterministic and free: no agent, just the digest and what is
- * already on disk.
+ * fingerprints match. But this trigger is structural, not measured from
+ * memory.md, so a module already eligible under an older mapper version that
+ * never surveyed it would otherwise sit unchanged forever — and the one
+ * command able to split it would then decline to run on exactly the
+ * repositories that need it. Deterministic and free: no agent, just the
+ * digest and what is already on disk.
  */
-export async function pendingSplits(
-  workspace: Workspace,
-  config: SwarmConfig,
-): Promise<string[]> {
+export async function pendingSplits(workspace: Workspace, _config: SwarmConfig): Promise<string[]> {
   const digest = await buildDigest(workspace.repoRoot);
   const pending: string[] = [];
 
   for (const spec of await workspace.listModules()) {
+    const areas = detectAreas(spec, digest.files);
+    if (areas.length === 0) continue;
     const recorded = await areasWithMemory(workspace, spec.slug);
-    const areaPlan = planAreas({
-      areas: detectAreas(spec, digest.files),
-      memoryTokens: estimateTokens(await workspace.readModuleFile(spec.slug, 'memory.md')),
-      budgetTokens: config.memoryBudgetTokens,
-      hasMemory: (slug) => recorded.has(slug),
-    });
-    if (areaPlan.survey.length > 0) pending.push(spec.slug);
+    if (areas.some((a) => !recorded.has(a.slug))) pending.push(spec.slug);
   }
 
   return pending;
@@ -153,6 +147,37 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
     await options.onEvent?.(event);
   };
 
+  const generatedAt = new Date().toISOString().slice(0, 10);
+
+  // -- 3a. Areas --------------------------------------------------------
+  // Detected and, if warranted, surveyed BEFORE each module's own analyst
+  // runs — over every module, not only the ones about to be re-analysed, so
+  // a module reused unchanged from an older map still gets a chance to pick
+  // up areas this version of the mapper can now see. The trigger is
+  // structural (detectAreas finding real sub-domains), never memory size: on
+  // a first map there is no memory.md yet to measure, and this now runs
+  // before there could be one.
+  //
+  // Sequentially, because surveyModuleAreas fans its own areas out across the
+  // scheduler; overlapping those pools would exceed maxConcurrentAgents.
+  const areaNamesByModule = new Map<string, string[]>();
+  for (const spec of modules) {
+    const survey = await surveyModuleAreas({
+      runtime,
+      workspace,
+      scheduler,
+      spec,
+      repoFiles: digest.files,
+      force: options.force === true,
+      ...(config.systemModel ? { model: config.systemModel } : {}),
+      onEvent: forward,
+      ...(options.signal ? { signal: options.signal } : {}),
+      generatedAt,
+      report,
+    });
+    areaNamesByModule.set(spec.slug, survey.areaNames);
+  }
+
   if (toAnalyse.length > 0) {
     report({
       phase: 'analyse',
@@ -162,7 +187,6 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
     });
   }
 
-  const generatedAt = new Date().toISOString().slice(0, 10);
   let costUsd = 0;
   const moduleHashes: Record<string, string> = { ...previousHashes };
   const stateQueue = createSerialQueue();
@@ -184,6 +208,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
         entry,
         siblings: siblings.filter((s) => s.slug !== entry.spec.slug),
         systemSummary: system.summary,
+        areaNames: areaNamesByModule.get(entry.spec.slug) ?? [],
         ...(config.systemModel ? { model: config.systemModel } : {}),
         onEvent: forward,
         ...(options.signal ? { signal: options.signal } : {}),
@@ -234,35 +259,6 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
   );
 
   const finalModules = resolveFinalModules(modules, results);
-
-  // -- 3b. Areas ------------------------------------------------------------
-  // Over EVERY module, not only the ones just re-analysed. A module that is
-  // over its load budget and has not changed is exactly the one that needs
-  // splitting, and the incremental path skips it by definition — which is how
-  // this step could be written, wired at both ends, and never once run.
-  //
-  // Sequentially, because surveyModuleAreas fans its own areas out across the
-  // scheduler; overlapping those pools would exceed maxConcurrentAgents.
-  for (const spec of finalModules) {
-    const known = results.get(spec.slug)?.memoryTokens;
-    const memoryTokens =
-      known ?? estimateTokens(await workspace.readModuleFile(spec.slug, 'memory.md'));
-    await surveyModuleAreas({
-      runtime,
-      workspace,
-      scheduler,
-      spec,
-      memoryTokens,
-      budgetTokens: config.memoryBudgetTokens,
-      repoFiles: digest.files,
-      force: options.force === true,
-      ...(config.systemModel ? { model: config.systemModel } : {}),
-      onEvent: forward,
-      ...(options.signal ? { signal: options.signal } : {}),
-      generatedAt,
-      report,
-    });
-  }
 
   // -- 4. Synthesise --------------------------------------------------------
   report({ phase: 'synthesise', message: 'writing system map' });

@@ -59,6 +59,24 @@ function runtimeReturning(structured: unknown, ok = true): AgentRuntime {
   };
 }
 
+function capturingRuntime(structured: unknown, prompts: string[]): AgentRuntime {
+  return {
+    id: 'stub',
+    preflight: async () => ({ ok: true, runtime: 'stub', checks: [] }),
+    async *run(spec: AgentSpec): AsyncIterable<SwarmEvent> {
+      prompts.push(spec.prompt);
+      yield {
+        type: 'agent.done',
+        at: new Date().toISOString(),
+        agentId: spec.id,
+        ok: true,
+        structured,
+        costUsd: 0.01,
+      };
+    },
+  };
+}
+
 test('a successful analysis writes the charter and memory, and hashes stay put when globs are not corrected', async () => {
   const workspace = await tempWorkspace();
   const digestWithFiles = digest(['src/billing/a.ts', 'src/billing/b.ts']);
@@ -120,6 +138,41 @@ test('correctedOwns recomputes fileCount and the hash from the new file set', as
   assert.deepEqual(outcome.spec.owns, ['src/invoicing/**']);
   assert.equal(outcome.spec.fileCount, 1);
   assert.notEqual(outcome.hash, 'original-hash');
+});
+
+test('areaNames tells the analyst per-area memory exists, without touching the persisted charter', async () => {
+  const workspace = await tempWorkspace();
+  const digestWithFiles = digest(['src/billing/a.ts', 'src/billing/b.ts']);
+  const prompts: string[] = [];
+
+  const outcome = await analyseModule({
+    runtime: capturingRuntime(
+      {
+        purpose: 'Handles invoicing.',
+        entryPoints: [],
+        landmarks: [],
+        invariants: [],
+        gotchas: [],
+        publicInterface: [],
+        dependsOn: [],
+      },
+      prompts,
+    ),
+    workspace,
+    digest: digestWithFiles,
+    entry: plan(),
+    siblings: [],
+    systemSummary: 'A billing system.',
+    areaNames: ['billing-invoices', 'billing-refunds'],
+    generatedAt: '2026-08-15',
+  });
+
+  assert.equal(outcome.status, 'analysed');
+  assert.match(prompts[0] ?? '', /already split by area: billing-invoices, billing-refunds/);
+  assert.match(prompts[0] ?? '', /ACROSS every area/);
+
+  const charter = await workspace.readModuleFile('billing', 'module.md');
+  assert.doesNotMatch(charter, /already split by area/, 'the note is prompt-only, never persisted');
 });
 
 test('a failed analysis writes a structural charter, drops no hash and reports the error', async () => {

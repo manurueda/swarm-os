@@ -1,9 +1,10 @@
 /**
- * Give an oversized module per-area memory.
+ * Give a structurally oversized module per-area memory.
  *
- * The trigger is the module's memory saturating its budget while covering
- * several sub-domains — the measured condition where each sub-domain gets
- * ~170 tokens and an agent loads mostly things it will never touch.
+ * The trigger is structural, not measured: `detectAreas` finds enough real
+ * sub-domains under the module's own paths. Memory doesn't factor in, on
+ * purpose — this now runs before that module's analyst ever produces any, so
+ * there is nothing yet to measure on a first map.
  *
  * This is the step that was once a closure inside `mapProject` capturing
  * seven outer variables, defined and never called. It takes every one of
@@ -13,7 +14,7 @@
 
 import type { AgentRuntime, ModuleSpec, SwarmEvent } from '../../types.js';
 import { analyzeModule, renderMemory } from '../../swarm/analyst.js';
-import { areaAsModule, detectAreas, planAreas } from '../../swarm/areas.js';
+import { areaAsModule, detectAreas } from '../../swarm/areas.js';
 import type { Scheduler } from '../../swarm/scheduler.js';
 import type { Workspace } from '../../workspace/store.js';
 import { areasWithMemory } from './areas-with-memory.js';
@@ -24,8 +25,6 @@ export interface SurveyModuleAreasArgs {
   workspace: Workspace;
   scheduler: Scheduler;
   spec: ModuleSpec;
-  memoryTokens: number;
-  budgetTokens: number;
   /** Every tracked file in the repo — areas are grouped from this. */
   repoFiles: string[];
   force: boolean;
@@ -36,73 +35,66 @@ export interface SurveyModuleAreasArgs {
   report: (progress: MapProgress) => void;
 }
 
-export async function surveyModuleAreas(args: SurveyModuleAreasArgs): Promise<void> {
-  const {
-    runtime,
-    workspace,
-    scheduler,
-    spec,
-    memoryTokens,
-    budgetTokens,
-    repoFiles,
-    force,
-    model,
-    onEvent,
-    signal,
-    generatedAt,
-    report,
-  } = args;
+export interface SurveyModuleAreasResult {
+  /** Slugs of the areas this module now has. Empty means it does not split. */
+  areaNames: string[];
+}
+
+export async function surveyModuleAreas(args: SurveyModuleAreasArgs): Promise<SurveyModuleAreasResult> {
+  const { runtime, workspace, scheduler, spec, repoFiles, force, model, onEvent, signal, generatedAt, report } =
+    args;
+
+  const areas = detectAreas(spec, repoFiles);
+  // A module with nothing structural to split along loses whatever areas an
+  // earlier, larger version of it once had.
+  await workspace.pruneAreas(spec.slug, areas.map((a) => a.slug));
+  if (areas.length === 0) return { areaNames: [] };
 
   const recorded = await areasWithMemory(workspace, spec.slug);
-  const areaPlan = planAreas({
-    areas: detectAreas(spec, repoFiles),
-    memoryTokens,
-    budgetTokens,
-    hasMemory: (slug) => recorded.has(slug),
-    ...(force ? { force: true } : {}),
-  });
+  const survey = force ? areas : areas.filter((a) => !recorded.has(a.slug));
 
-  await workspace.pruneAreas(spec.slug, areaPlan.keep.map((a) => a.slug));
-  if (areaPlan.survey.length === 0) return;
+  if (survey.length > 0) {
+    report({
+      phase: 'analyse',
+      message: `splitting into ${areas.length} areas`,
+      module: spec.slug,
+    });
 
-  report({
-    phase: 'analyse',
-    message: `splitting into ${areaPlan.keep.length} areas`,
-    module: spec.slug,
-  });
-
-  const surveys = await scheduler.run(
-    areaPlan.survey.map((area) => async () => {
-      const { analysis } = await analyzeModule({
-        runtime,
-        repoRoot: workspace.repoRoot,
-        module: areaAsModule(spec, area),
-        siblings: areaPlan.keep
-          .filter((a) => a.slug !== area.slug)
-          .map((a) => ({ slug: a.slug, purpose: `the ${a.slug} area (${a.path})` })),
-        systemSummary: spec.purpose,
-        ...(model ? { model } : {}),
-        ...(onEvent ? { onEvent } : {}),
-        ...(signal ? { signal } : {}),
-      });
-      if (!analysis) throw new Error(`area ${area.slug} returned nothing`);
-      return { area, analysis };
-    }),
-  );
-
-  for (const survey of surveys) {
-    if (survey instanceof Error || !survey) continue;
-    await workspace.writeAreaFile(
-      spec.slug,
-      survey.area.slug,
-      'area.json',
-      `${JSON.stringify(survey.area, null, 2)}\n`,
+    const surveys = await scheduler.run(
+      survey.map((area) => async () => {
+        const { analysis } = await analyzeModule({
+          runtime,
+          repoRoot: workspace.repoRoot,
+          module: areaAsModule(spec, area),
+          siblings: areas
+            .filter((a) => a.slug !== area.slug)
+            .map((a) => ({ slug: a.slug, purpose: `the ${a.slug} area (${a.path})` })),
+          systemSummary: spec.purpose,
+          ...(model ? { model } : {}),
+          ...(onEvent ? { onEvent } : {}),
+          ...(signal ? { signal } : {}),
+        });
+        if (!analysis) throw new Error(`area ${area.slug} returned nothing`);
+        return { area, analysis };
+      }),
     );
-    await workspace.writeAreaFile(
-      spec.slug,
-      survey.area.slug,
-      'memory.md',
-      renderMemory(areaAsModule(spec, survey.area), survey.analysis, generatedAt),
-    );
+
+    for (const result of surveys) {
+      if (result instanceof Error || !result) continue;
+      await workspace.writeAreaFile(
+        spec.slug,
+        result.area.slug,
+        'area.json',
+        `${JSON.stringify(result.area, null, 2)}\n`,
+      );
+      await workspace.writeAreaFile(
+        spec.slug,
+        result.area.slug,
+        'memory.md',
+        renderMemory(areaAsModule(spec, result.area), result.analysis, generatedAt),
+      );
+    }
   }
+
+  return { areaNames: areas.map((a) => a.slug) };
 }
