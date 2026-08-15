@@ -1,0 +1,41 @@
+# Paths this module owns. Agents are scoped to these globs and their
+# diffs are checked against them after every mission.
+
+name: Agent Runtime Port
+purpose: "Defines the AgentRuntime port (types.ts) and its sole implementation,
+  a subprocess wrapper around the local `claude` CLI that speaks its
+  `--output-format stream-json` NDJSON protocol and translates it into a
+  normalized SwarmEvent stream. Also owns: environment scrubbing so spawned
+  agents never see billing/nesting env vars, construction of tool-less \"system
+  tier\" prompts, empirically-measured per-agent context baseline estimates, and
+  self-update detection/checking/applying for the Swarm OS binary itself
+  (git-checkout or npm install). index.ts is the package's single flat barrel
+  export surface for all of @swarm-os/core, not just this module."
+owns:
+  - packages/core/src/runtime/**
+  - packages/core/src/update/**
+  - packages/core/src/index.ts
+  - packages/core/src/types.ts
+  - packages/core/package.json
+  - packages/core/tsconfig.json
+entryPoints:
+  - packages/core/src/types.ts
+  - packages/core/src/runtime/claude-code-local.ts
+  - packages/core/src/runtime/stream-json.ts
+  - packages/core/src/runtime/env.ts
+  - packages/core/src/update/index.ts
+  - packages/core/src/index.ts
+dependsOn:
+  - cli — consumes AgentRuntime, backgroundUpdate/readUpdateStatus etc. for the
+    `swarm update` command and to spawn agents
+  - mission — builds AgentSpec and drives it through
+    AgentRuntime.run()/collectAgent for mission/reviewer agents
+  - swarm-orchestration — Scheduler and analyst/manager code use AgentRuntime,
+    standaloneSystemPrompt/standaloneAgentPrompt, and agentBaselineTokens to
+    budget and run agents
+  - mapper — partitioner/synthesiser agents use the system-tier prompt helpers
+    and AgentRuntime
+  - workspace-git — Workspace persists SwarmRecord/MissionRecord/ModuleSpec
+    types defined here; update/index.ts's stateDir() (~/.swarm) is distinct from
+    the per-project workspace .swarm/ dir owned by workspace-git
+fileCount: 10

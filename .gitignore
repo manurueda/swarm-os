@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.test-build/
 *.tsbuildinfo
 
 # Never commit credentials. Swarm OS itself stores none — auth is delegated
@@ -10,7 +11,11 @@ dist/
 *.pem
 *.key
 credentials.json
-.swarm/missions/*/events.jsonl
 
 .DS_Store
-.swarm/
+
+# `.swarm/` is deliberately absent from this file. What is per-run or
+# per-machine is ignored by `.swarm/.gitignore`, which Swarm OS writes and
+# keeps current; what is left — the module map, each module's memory, the
+# config — is the shared asset, and a blanket rule here would quietly take it
+# out of git along with everything else.

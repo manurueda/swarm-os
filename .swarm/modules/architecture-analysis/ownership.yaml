@@ -1,0 +1,35 @@
+# Paths this module owns. Agents are scoped to these globs and their
+# diffs are checked against them after every mission.
+
+name: Architecture Analysis
+purpose: "Pure, model-free static analysis of a target repository, plus one
+  model-backed step that turns those facts into human-actionable refactor
+  proposals. Four files: code-stats.ts (language-agnostic file/line/naming facts
+  via `wc -l` and path heuristics), import-graph.ts (a regex-based, per-language
+  import graph resolved to repo files, module-attributed, with cycle detection),
+  signals.ts (combines the module map + code stats + import graph into a sorted
+  list of severity-ranked `Signal`s plus per-module `ModuleHealth` and ownership
+  coverage), and refactor.ts (spawns a read-only reviewer agent per module,
+  seeded with the signals concerning it, that confirms/rejects them and emits
+  structured refactor proposals, and renders them all into a Markdown report).
+  Consumed by `swarm loop` (packages/core/src/loop/run.ts) for incremental
+  re-analysis and by the UI snapshot builder (packages/core/src/ui/snapshot.ts)
+  for the dashboard, and re-exported wholesale from packages/core/src/index.ts."
+owns:
+  - packages/core/src/architecture/**
+entryPoints:
+  - packages/core/src/architecture/signals.ts
+  - packages/core/src/architecture/code-stats.ts
+  - packages/core/src/architecture/import-graph.ts
+  - packages/core/src/architecture/refactor.ts
+dependsOn:
+  - "swarm-orchestration (packages/core/src/swarm/ownership.ts: isOwned,
+    findOwnershipConflicts, matchesGlob — used to attribute files/imports to
+    module slugs and detect ownership conflicts)"
+  - "runtime (packages/core/src/runtime/collect.ts: collectAgent/AgentOutcome,
+    and packages/core/src/runtime/system-tier.ts: standaloneAgentPrompt — used
+    by refactor.ts to spawn the read-only reviewer agent)"
+  - "core types (packages/core/src/types.ts: ModuleSpec, AgentRuntime,
+    SwarmEvent — shared domain types this module's functions are parameterized
+    over)"
+fileCount: 4

@@ -1,0 +1,24 @@
+# Paths this module owns. Agents are scoped to these globs and their
+# diffs are checked against them after every mission.
+
+name: UI & Status Rendering
+purpose: "Assembles a serializable snapshot of everything in a `.swarm/`
+  workspace (modules, signals, missions, refactor proposals, memory claims,
+  import graph) via buildSnapshot(), and renders it as a single self-contained
+  dark-themed HTML/CSS/JS page via renderUi(). Used both for the static `swarm
+  ui` output and, wrapped by the CLI's local HTTP server
+  (packages/cli/src/server.ts), for a live-updating view of a running mission.
+  Deliberately opinionated: the primary object on the page is a 'task'
+  (something wrong, where, and the command that fixes it), not a dashboard of
+  stats."
+owns:
+  - packages/core/src/ui/**
+entryPoints:
+  - packages/core/src/ui/snapshot.ts
+  - packages/core/src/ui/render.ts
+dependsOn:
+  - workspace-git
+  - architecture-analysis
+  - swarm-orchestration
+  - runtime
+fileCount: 2

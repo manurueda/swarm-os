@@ -11,7 +11,8 @@
   },
   "scripts": {
     "build": "tsc --build packages/core packages/cli",
-    "clean": "tsc --build --clean packages/core packages/cli && rm -rf packages/*/dist",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test '.test-build/packages/*/src/**/*.test.js'",
+    "clean": "tsc --build --clean packages/core packages/cli && rm -rf packages/*/dist .test-build",
     "watch": "tsc --build --watch packages/core packages/cli",
     "swarm": "node packages/cli/dist/main.js",
     "link": "npm run build && npm link -w @swarm-os/cli"
