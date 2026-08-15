@@ -21,7 +21,7 @@ test('every final module ends asleep', () => {
 });
 
 test('memoryTokens comes from this run\'s results, falling back to what was already recorded', () => {
-  const state: StateFile = { swarms: { billing: { module: 'billing', state: 'awake', memoryTokens: 50 } } };
+  const state: StateFile = { swarms: { billing: { module: 'billing', state: 'active', memoryTokens: 50 } } };
   const results = new Map<string, MapModuleResult>([
     ['billing', { spec: spec('billing'), status: 'analysed', memoryTokens: 120 }],
   ]);
@@ -37,7 +37,7 @@ test('a module with no new result keeps its previously recorded memoryTokens', (
 
 test('lastMission and lastActiveAt survive from the previous record', () => {
   const state: StateFile = {
-    swarms: { billing: { module: 'billing', state: 'awake', lastMission: 'm1', lastActiveAt: '2026-08-01' } },
+    swarms: { billing: { module: 'billing', state: 'active', lastMission: 'm1', lastActiveAt: '2026-08-01' } },
   };
   const next = buildNextState(state, 'h', {}, { summary: '', stack: '' }, [spec('billing')], '2026-08-15', new Map());
   assert.equal(next.swarms['billing']?.lastMission, 'm1');
