@@ -131,6 +131,50 @@ function dedupeSlugs(areas: AreaSpec[]): AreaSpec[] {
 }
 
 /**
+ * The fraction of its budget a module's memory may reach before its knowledge
+ * is addressed per area instead of loaded whole.
+ *
+ * Below 100% on purpose. At the budget the compressor has already begun cutting
+ * to fit, and what it cut is gone — splitting then preserves nothing.
+ */
+export const SPLIT_AT = 0.85;
+
+export interface AreaPlan {
+  /** The areas this module should have. Empty means: do not split it. */
+  keep: AreaSpec[];
+  /** Of those, the ones with nothing recorded yet — the only ones worth an agent. */
+  survey: AreaSpec[];
+}
+
+/**
+ * Decide whether a module's memory should be addressed per area, and what that
+ * costs in agents.
+ *
+ * Kept apart from the doing of it, and from every file it would need to read,
+ * because this is the part with the judgement in it.
+ */
+export function planAreas(input: {
+  areas: AreaSpec[];
+  memoryTokens: number;
+  budgetTokens: number;
+  /** Does this area already hold knowledge worth keeping? */
+  hasMemory: (slug: string) => boolean;
+  force?: boolean;
+}): AreaPlan {
+  const { areas, memoryTokens, budgetTokens, hasMemory } = input;
+
+  const underPressure = budgetTokens > 0 && memoryTokens >= budgetTokens * SPLIT_AT;
+  // A module with no structure to split along needs a different remedy, not a
+  // worse split — `swarm refactor` reports that as `scattered-module`.
+  if (!underPressure || areas.length === 0) return { keep: [], survey: [] };
+
+  return {
+    keep: areas,
+    survey: input.force ? areas : areas.filter((a) => !hasMemory(a.slug)),
+  };
+}
+
+/**
  * An area, expressed as a module so the existing analyst can survey it.
  *
  * An area is the same shape of problem as a module — a bounded set of paths

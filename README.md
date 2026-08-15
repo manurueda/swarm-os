@@ -63,6 +63,7 @@ cd swarm-os
 npm install
 npm run build
 npm link -w @swarm-os/cli    # puts `swarm` on your PATH
+npm test                     # optional; this is what `verifyCommand` runs
 ```
 
 Then confirm the machine is ready:
@@ -292,11 +293,17 @@ swarm ui --serve    # the same page, live: starts missions and follows them
 One self-contained HTML file, opened. No server, no network, no build — it
 works offline and opens straight from disk.
 
-Three tabs, and the first one is the point:
+Four tabs, and the first one is the point:
 
 - **Tasks** — everything worth doing, most serious first. Each card says what
   is wrong, where, and carries the one command that acts on it. Refactor
   proposals rank above raw signals, because an agent read the code for those.
+- **Map** — the repository as one picture: a trunk, a branch per swarm. Each
+  branch carries what it owns and what an agent *wakes up holding* — the fixed
+  spawn baseline, then that module's context pack, against the window. That is
+  the number that decides whether this design is working, so it is the one the
+  picture is built around. A memory that has outgrown its budget is the only
+  thing wearing colour.
 - **Modules** — what is in here. A name, a size bar, and a flag if something
   needs attention. Click one for its invariants, its gotchas and its heaviest
   files.

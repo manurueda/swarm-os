@@ -13,6 +13,8 @@ import {
   DEFAULT_CONFIG,
   Workspace,
   detectDrift,
+  ensureSwarmIgnore,
+  pendingSplits,
   isGitRepo,
   mapProject,
   type MapProgress,
@@ -44,21 +46,38 @@ export async function mapCommand(args: ParsedArgs): Promise<number> {
 
   if (existing && !force && !repartition) {
     const drift = await detectDrift(workspace);
-    if (!drift.drifted) {
+    // Memory grows from missions, not from files, so a module can outgrow its
+    // load budget while every fingerprint still matches.
+    const pending = await pendingSplits(workspace, config);
+
+    if (!drift.drifted && pending.length === 0) {
       note(`Already mapped and unchanged since ${drift.mappedAt?.slice(0, 10) ?? 'last run'}.`);
       note('Nothing to re-analyse. Use --force to redo everything, --repartition to redraw boundaries.');
       await printMap(workspace);
       return 0;
     }
-    note(
-      drift.unknown
-        ? 'no fingerprint on record for this map — re-analysing every module.'
-        : `${drift.changedModules.length} module(s) changed since mapping — re-analysing only those.`,
-    );
+    if (drift.drifted) {
+      note(
+        drift.unknown
+          ? 'no fingerprint on record for this map — re-analysing every module.'
+          : `${drift.changedModules.length} module(s) changed since mapping — re-analysing only those.`,
+      );
+    }
+    if (pending.length > 0) {
+      note(
+        `${pending.length} module(s) have outgrown their memory budget — ` +
+          `splitting by area so an agent loads only the part it needs: ${pending.join(', ')}`,
+      );
+    }
   }
 
   // Persist config first so the project is usable even if mapping is interrupted.
   await workspace.writeConfig(config);
+  // And the ignore rules alongside it. Until this ran only when a mission cut
+  // its first worktree, so a repo that had only ever been mapped would offer
+  // its per-run state — mission records, fingerprints, generated views — for
+  // committing next to the map that is meant to be shared.
+  await ensureSwarmIgnore(target, config.worktreeRoot);
 
   heading(`Mapping ${c.bold(target)}`);
 

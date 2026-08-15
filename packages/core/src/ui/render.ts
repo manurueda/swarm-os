@@ -182,6 +182,34 @@ button.copy.done { color: var(--ok); border-color: var(--ok); }
   background: var(--card-2); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px 18px; margin: -2px 0 8px;
 }
+/* The map: the repository as one picture. A trunk, one branch per swarm, and
+   on each branch the only two numbers that decide whether it works — how much
+   code it owns, and how much context an agent wakes up holding. No legend, no
+   controls, no zoom: if it needs explaining it does not belong here. */
+.map { width: 100%; height: auto; display: block; overflow: visible; }
+.map .link { fill: none; stroke: var(--line-2); stroke-width: 1.5; }
+.map .trunk rect { fill: var(--card-2); stroke: var(--line-2); }
+.map .node rect { fill: var(--card); stroke: var(--line); }
+.map .node:hover rect { stroke: var(--accent); }
+.map .node { cursor: pointer; }
+.map .nm { fill: var(--fg); font: 550 13px var(--sans); letter-spacing: -0.01em; }
+.map .sub { fill: var(--fg-passive); font: 11px var(--mono); }
+/* A swarm whose memory no longer fits its budget is the one thing on this
+   picture that is already wrong, so it is the one thing wearing colour. */
+.map .sub .over { fill: var(--warn); }
+.map .track { fill: var(--line-2); }
+/* The baseline is the same on every branch — neutral, so the eye reads only
+   the part that differs between modules. */
+.map .base { fill: var(--fg-passive); }
+.map .fill.ok { fill: var(--ok); }
+.map .fill.warn { fill: var(--warn); }
+.map .fill.high { fill: var(--high); }
+.map .pct { font: 11px var(--mono); }
+.map .pct.ok { fill: var(--fg-passive); }
+.map .pct.warn { fill: var(--warn); }
+.map .pct.high { fill: var(--high); }
+.mapfoot { color: var(--fg-passive); font-size: 12px; margin-top: 14px; text-align: center; }
+
 .detail h3 { font-size: 14px; font-weight: 600; margin: 0 0 3px; }
 .detail p { color: var(--fg-muted); font-size: 13.5px; margin: 0 0 4px; }
 .detail .grp { margin-top: 15px; }
@@ -330,7 +358,7 @@ function humaniseKind(kind) {
 /* The command that actually resolves this signal, not a generic one. */
 function actionFor(s, slug) {
   switch (s.kind) {
-    case 'memory-pressure': return 'swarm map --force';
+    case 'memory-pressure': return 'swarm map';
     case 'unowned-files':
     case 'ownership-conflict': return 'swarm map --repartition';
     default: return slug ? 'swarm refactor ' + slug : 'swarm refactor';
@@ -421,6 +449,65 @@ const moduleRow = (m, max) => {
   \${open === m.slug ? moduleDetail(m) : ''}\`;
 };
 
+/* ---- map ---------------------------------------------------------------- */
+/* The repository as one picture: a trunk, a branch per swarm. The bar is the
+   only thing being argued — what an agent wakes up holding, which is the fixed
+   spawn baseline plus this module's context pack, against the window it then
+   has to do the work in. Everything else a reader can get from Modules. */
+const K = (v) => v >= 1000 ? Math.round(v / 1000) + 'k' : String(Math.round(v));
+
+const load = (m) => {
+  const onWake = D.baselineTokens + m.contextTokens;
+  const pct = onWake / D.contextWindow;
+  return { onWake, pct, level: pct < 0.30 ? 'ok' : pct < 0.60 ? 'warn' : 'high' };
+};
+
+function mapView() {
+  const mods = [...D.modules].sort((a, b) => b.files - a.files);
+  if (!mods.length) return '<div class="empty"><b>Nothing mapped</b>Run swarm map.</div>';
+
+  const W = 860, NH = 66, GAP = 12, NX = 260, NW = 592, TX = 8, TW = 146, TH = 56, TOP = 8;
+  const H = Math.max(mods.length * (NH + GAP) - GAP, TH) + TOP * 2;
+  const tY = (H - TH) / 2;
+  const tCY = tY + TH / 2;
+  const midX = (TX + TW + NX) / 2;
+
+  const parts = mods.map((m, i) => {
+    const y = TOP + i * (NH + GAP);
+    const cy = y + NH / 2;
+    const l = load(m);
+    const barW = NW - 32;
+    const seg = (t) => Math.max(2, Math.round(barW * Math.min(1, t / D.contextWindow)));
+    const baseW = seg(D.baselineTokens);
+    const packW = seg(m.contextTokens);
+    return {
+      link: \`<path class="link" d="M\${TX + TW} \${tCY} C\${midX} \${tCY}, \${midX} \${cy}, \${NX} \${cy}"/>\`,
+      node: \`<g class="node" data-slug="\${esc(m.slug)}">
+        <rect x="\${NX}" y="\${y}" width="\${NW}" height="\${NH}" rx="10"/>
+        <text class="nm" x="\${NX + 16}" y="\${y + 24}">\${esc(m.slug)}</text>
+        <text class="sub" x="\${NX + 16}" y="\${y + 41}">\${n(m.files)} files \\u00b7 <tspan class="\${m.memoryTokens > D.memoryBudget ? 'over' : ''}">\${K(m.memoryTokens)} memory</tspan></text>
+        <text class="pct \${l.level}" x="\${NX + NW - 16}" y="\${y + 24}" text-anchor="end">\${K(l.onWake)} on wake</text>
+        <rect class="track" x="\${NX + 16}" y="\${y + 50}" width="\${barW}" height="7" rx="3.5"/>
+        <rect class="base" x="\${NX + 16}" y="\${y + 50}" width="\${baseW}" height="7" rx="3.5"/>
+        <rect class="fill \${l.level}" x="\${NX + 16 + baseW}" y="\${y + 50}" width="\${packW}" height="7" rx="3.5"/>
+      </g>\`,
+    };
+  });
+
+  return \`
+    <svg class="map" viewBox="0 0 \${W} \${H}" role="img"
+         aria-label="\${esc(D.repoName)}: \${mods.length} swarms and the context each one wakes with">
+      \${parts.map(p => p.link).join('')}
+      <g class="trunk">
+        <rect x="\${TX}" y="\${tY}" width="\${TW}" height="\${TH}" rx="10"/>
+        <text class="nm" x="\${TX + TW / 2}" y="\${tY + 24}" text-anchor="middle">\${esc(D.repoName)}</text>
+        <text class="sub" x="\${TX + TW / 2}" y="\${tY + 41}" text-anchor="middle">\${mods.length} swarms</text>
+      </g>
+      \${parts.map(p => p.node).join('')}
+    </svg>
+    <div class="mapfoot">\${K(D.baselineTokens)} spawn baseline, then this module's context pack \\u2014 against a \${K(D.contextWindow)} window</div>\`;
+}
+
 const launcher = () => LIVE ? \`
   <div class="launch">
     <input id="goal" placeholder="What do you want changed?" \${live.running ? 'disabled' : ''}>
@@ -450,6 +537,7 @@ function body() {
       ? tasks.map(taskCard).join('')
       : '<div class="empty"><b>Nothing to fix</b>Run swarm refactor to look again.</div>';
   }
+  if (tab === 'map') return mapView();
   if (tab === 'modules') {
     const max = Math.max(...D.modules.map(m => m.files), 1);
     return D.modules.map(m => moduleRow(m, max)).join('');
@@ -475,6 +563,7 @@ function render() {
     </header>
     <nav>
       <button data-tab="tasks"    aria-selected="\${tab === 'tasks'}">Tasks<span class="n">\${count}</span></button>
+      <button data-tab="map"      aria-selected="\${tab === 'map'}">Map</button>
       <button data-tab="modules"  aria-selected="\${tab === 'modules'}">Modules<span class="n">\${D.modules.length}</span></button>
       <button data-tab="missions" aria-selected="\${tab === 'missions'}">Missions<span class="n">\${D.missions.length}</span></button>
     </nav>
@@ -485,6 +574,10 @@ function render() {
   });
   document.querySelectorAll('.mod').forEach(el => {
     el.onclick = () => { open = open === el.dataset.slug ? null : el.dataset.slug; render(); };
+  });
+  /* A branch is a shortcut into that module, not a thing to select on the map. */
+  document.querySelectorAll('.map .node').forEach(el => {
+    el.onclick = () => { tab = 'modules'; open = el.dataset.slug; render(); };
   });
 
   const go = document.getElementById('go');

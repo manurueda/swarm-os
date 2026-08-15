@@ -24,6 +24,7 @@ export {
 } from './runtime/env.js';
 export { NdjsonBuffer, translate, tryParseJson } from './runtime/stream-json.js';
 export { standaloneSystemPrompt, standaloneAgentPrompt } from './runtime/system-tier.js';
+export { agentBaselineTokens, CONTEXT_WINDOW } from './runtime/baseline.js';
 
 // Self-update
 export {
@@ -50,7 +51,7 @@ export type { SwarmConfig } from './workspace/config.js';
 export { buildDigest, renderDigest } from './mapper/digest.js';
 export type { RepoDigest } from './mapper/digest.js';
 export { mapRepository, renderSystemMap, MODULE_MAP_SCHEMA } from './mapper/map.js';
-export { mapProject, detectDrift } from './mapper/pipeline.js';
+export { mapProject, detectDrift, pendingSplits } from './mapper/pipeline.js';
 export type { MapResult, MapProgress, MapModuleResult, MapPhase } from './mapper/pipeline.js';
 
 // Swarms
@@ -69,7 +70,10 @@ export type { ContextPack, SleepResult } from './swarm/manager.js';
 export { checkOwnership, isOwned, matchesGlob, findOwnershipConflicts } from './swarm/ownership.js';
 export type { OwnershipReport, OwnershipConflict } from './swarm/ownership.js';
 export { Scheduler } from './swarm/scheduler.js';
-export { detectAreas, areaAsModule, renderAreaIndex } from './swarm/areas.js';
+export { detectAreas, areaAsModule, planAreas, renderAreaIndex, SPLIT_AT } from './swarm/areas.js';
+export type { AreaPlan } from './swarm/areas.js';
+export { splitAreaSections, mergeAreaMemory } from './swarm/area-memory.js';
+export type { AreaSections } from './swarm/area-memory.js';
 export type { AreaSpec } from './swarm/areas.js';
 
 // Architecture review

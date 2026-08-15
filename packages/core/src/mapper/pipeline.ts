@@ -25,7 +25,7 @@ import {
   renderMemory,
   type ModuleAnalysis,
 } from '../swarm/analyst.js';
-import { areaAsModule, detectAreas } from '../swarm/areas.js';
+import { areaAsModule, detectAreas, planAreas } from '../swarm/areas.js';
 import { Workspace, estimateTokens } from '../workspace/store.js';
 import type { SwarmConfig } from '../workspace/config.js';
 import { buildDigest, type RepoDigest } from './digest.js';
@@ -93,6 +93,47 @@ export interface MapProjectOptions {
   onProgress?: (progress: MapProgress) => void;
   onEvent?: (event: SwarmEvent) => void | Promise<void>;
   signal?: AbortSignal;
+}
+
+/** Areas of a module that already hold knowledge worth not overwriting. */
+async function areasWithMemory(workspace: Workspace, slug: string): Promise<Set<string>> {
+  const recorded = new Set<string>();
+  for (const area of await workspace.listAreas(slug)) {
+    if ((await workspace.readAreaFile(slug, area)).trim()) recorded.add(area);
+  }
+  return recorded;
+}
+
+/**
+ * Modules whose memory has outgrown what every agent should have to load, and
+ * which have not been split by area yet.
+ *
+ * `swarm map` stops at "already mapped and unchanged" when the file
+ * fingerprints match. But memory grows from missions, not from files, so a
+ * module can cross its load budget without a single file changing — and the one
+ * command able to split it would then decline to run on exactly the repositories
+ * that need it. Deterministic and free: no agent, just the digest and what is
+ * already on disk.
+ */
+export async function pendingSplits(
+  workspace: Workspace,
+  config: SwarmConfig,
+): Promise<string[]> {
+  const digest = await buildDigest(workspace.repoRoot);
+  const pending: string[] = [];
+
+  for (const spec of await workspace.listModules()) {
+    const recorded = await areasWithMemory(workspace, spec.slug);
+    const areaPlan = planAreas({
+      areas: detectAreas(spec, digest.files),
+      memoryTokens: estimateTokens(await workspace.readModuleFile(spec.slug, 'memory.md')),
+      budgetTokens: config.memoryBudgetTokens,
+      hasMemory: (slug) => recorded.has(slug),
+    });
+    if (areaPlan.survey.length > 0) pending.push(spec.slug);
+  }
+
+  return pending;
 }
 
 export async function mapProject(options: MapProjectOptions): Promise<MapResult> {
@@ -226,29 +267,31 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
    * ~170 tokens and an agent loads mostly things it will never touch.
    */
   const surveyAreas = async (spec: ModuleSpec, memoryTokens: number): Promise<void> => {
-    if (memoryTokens < config.memoryBudgetTokens * 0.85) {
-      await workspace.pruneAreas(spec.slug, []);
-      return;
-    }
+    const recorded = await areasWithMemory(workspace, spec.slug);
+    const areaPlan = planAreas({
+      areas: detectAreas(spec, digest.files),
+      memoryTokens,
+      budgetTokens: config.memoryBudgetTokens,
+      hasMemory: (slug) => recorded.has(slug),
+      ...(options.force ? { force: true } : {}),
+    });
 
-    const areas = detectAreas(spec, digest.files);
-    await workspace.pruneAreas(spec.slug, areas.map((a) => a.slug));
-    if (areas.length === 0) return;
+    await workspace.pruneAreas(spec.slug, areaPlan.keep.map((a) => a.slug));
+    if (areaPlan.survey.length === 0) return;
 
     report({
       phase: 'analyse',
-      message: `splitting into ${areas.length} areas`,
+      message: `splitting into ${areaPlan.keep.length} areas`,
       module: spec.slug,
     });
 
     const surveys = await scheduler.run(
-      areas.map((area) => async () => {
-        const asModule = areaAsModule(spec, area);
+      areaPlan.survey.map((area) => async () => {
         const { analysis } = await analyzeModule({
           runtime,
           repoRoot: workspace.repoRoot,
-          module: asModule,
-          siblings: areas
+          module: areaAsModule(spec, area),
+          siblings: areaPlan.keep
             .filter((a) => a.slug !== area.slug)
             .map((a) => ({ slug: a.slug, purpose: `the ${a.slug} area (${a.path})` })),
           systemSummary: spec.purpose,
@@ -392,10 +435,26 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
 
   await stateWrites;
 
+  const finalModules = modules.map((m) => results.get(m.slug)?.spec ?? m);
+
+  // -- 3b. Areas ------------------------------------------------------------
+  // Over EVERY module, not only the ones just re-analysed. A module that is
+  // over its load budget and has not changed is exactly the one that needs
+  // splitting, and the incremental path skips it by definition — which is how
+  // this step could be written, wired at both ends, and never once run.
+  //
+  // Sequentially, because surveyAreas fans its own areas out across the
+  // scheduler; overlapping those pools would exceed maxConcurrentAgents.
+  for (const spec of finalModules) {
+    const known = results.get(spec.slug)?.memoryTokens;
+    const memoryTokens =
+      known ?? estimateTokens(await workspace.readModuleFile(spec.slug, 'memory.md'));
+    await surveyAreas(spec, memoryTokens);
+  }
+
   // -- 4. Synthesise --------------------------------------------------------
   report({ phase: 'synthesise', message: 'writing system map' });
 
-  const finalModules = modules.map((m) => results.get(m.slug)?.spec ?? m);
   await workspace.writeSystem(renderSystemMap(system, finalModules, digest));
 
   // Prune hashes for modules that no longer exist.
