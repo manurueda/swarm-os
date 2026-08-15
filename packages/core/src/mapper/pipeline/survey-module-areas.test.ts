@@ -40,6 +40,11 @@ function repoFiles(): string[] {
   return files;
 }
 
+/** One sub-domain of 2 files — nowhere near enough for detectAreas to split. */
+function smallRepoFiles(): string[] {
+  return ['src/rendering/a.ts', 'src/rendering/b.ts'];
+}
+
 function respondingRuntime(calls: string[]): AgentRuntime {
   return {
     id: 'stub',
@@ -70,50 +75,48 @@ function neverCalledRuntime(): AgentRuntime {
     id: 'never-called',
     preflight: async () => ({ ok: true, runtime: 'never-called', checks: [] }),
     async *run(): AsyncIterable<SwarmEvent> {
-      throw new Error('the runtime must not be called when the module is not under pressure');
+      throw new Error('the runtime must not be called when the module has no real sub-domains');
     },
   };
 }
 
-test('a module under budget is not split, and no agent runs', async () => {
+test('a module with no real sub-domains is not split, and no agent runs', async () => {
   const workspace = await tempWorkspace();
   const progress: MapProgress[] = [];
 
-  await surveyModuleAreas({
+  const result = await surveyModuleAreas({
     runtime: neverCalledRuntime(),
     workspace,
     scheduler: new Scheduler({ limit: 2 }),
     spec: SPEC,
-    memoryTokens: 100,
-    budgetTokens: 2000,
-    repoFiles: repoFiles(),
+    repoFiles: smallRepoFiles(),
     force: false,
     generatedAt: '2026-08-15',
     report: (p) => progress.push(p),
   });
 
+  assert.deepEqual(result.areaNames, []);
   assert.deepEqual(progress, []);
   assert.deepEqual(await workspace.listAreas('rendering'), []);
 });
 
-test('a module pressing its budget with real sub-domains is split, surveyed and filed', async () => {
+test('a module with real sub-domains is split, surveyed and filed — no memory.md needed to trigger it', async () => {
   const workspace = await tempWorkspace();
   const progress: MapProgress[] = [];
   const calls: string[] = [];
 
-  await surveyModuleAreas({
+  const result = await surveyModuleAreas({
     runtime: respondingRuntime(calls),
     workspace,
     scheduler: new Scheduler({ limit: 2 }),
     spec: SPEC,
-    memoryTokens: 1900,
-    budgetTokens: 2000,
     repoFiles: repoFiles(),
     force: false,
     generatedAt: '2026-08-15',
     report: (p) => progress.push(p),
   });
 
+  assert.deepEqual(result.areaNames.sort(), ['rendering-audio', 'rendering-captions', 'rendering-video']);
   assert.match(progress[0]?.message ?? '', /splitting into 3 areas/);
   assert.equal(progress[0]?.module, 'rendering');
   assert.equal(calls.length, 3, 'one analyst per detected area');
@@ -134,13 +137,11 @@ test('an area that already has memory is kept but not re-surveyed', async () => 
   await workspace.writeAreaFile('rendering', 'rendering-captions', 'memory.md', '- already known\n');
   const calls: string[] = [];
 
-  await surveyModuleAreas({
+  const result = await surveyModuleAreas({
     runtime: respondingRuntime(calls),
     workspace,
     scheduler: new Scheduler({ limit: 2 }),
     spec: SPEC,
-    memoryTokens: 1900,
-    budgetTokens: 2000,
     repoFiles: repoFiles(),
     force: false,
     generatedAt: '2026-08-15',
@@ -148,6 +149,7 @@ test('an area that already has memory is kept but not re-surveyed', async () => 
   });
 
   assert.equal(calls.length, 2, 'rendering-captions already has memory, so only the other two are surveyed');
+  assert.deepEqual(result.areaNames.sort(), ['rendering-audio', 'rendering-captions', 'rendering-video']);
   assert.equal(
     await workspace.readAreaFile('rendering', 'rendering-captions', 'memory.md'),
     '- already known\n',
@@ -165,8 +167,6 @@ test('force re-surveys every area, even ones with existing memory', async () => 
     workspace,
     scheduler: new Scheduler({ limit: 2 }),
     spec: SPEC,
-    memoryTokens: 1900,
-    budgetTokens: 2000,
     repoFiles: repoFiles(),
     force: true,
     generatedAt: '2026-08-15',
@@ -176,22 +176,21 @@ test('force re-surveys every area, even ones with existing memory', async () => 
   assert.equal(calls.length, 3);
 });
 
-test('a module already split loses areas the current plan no longer wants once it drops under budget', async () => {
+test('a module already split loses areas the current plan no longer wants once its files shrink below the threshold', async () => {
   const workspace = await tempWorkspace();
   await workspace.writeAreaFile('rendering', 'stale-area', 'memory.md', '- leftover\n');
 
-  await surveyModuleAreas({
+  const result = await surveyModuleAreas({
     runtime: neverCalledRuntime(),
     workspace,
     scheduler: new Scheduler({ limit: 2 }),
     spec: SPEC,
-    memoryTokens: 100,
-    budgetTokens: 2000,
-    repoFiles: repoFiles(),
+    repoFiles: smallRepoFiles(),
     force: false,
     generatedAt: '2026-08-15',
     report: () => {},
   });
 
+  assert.deepEqual(result.areaNames, []);
   assert.deepEqual(await workspace.listAreas('rendering'), []);
 });
