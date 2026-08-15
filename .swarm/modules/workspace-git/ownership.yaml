@@ -1,0 +1,22 @@
+# Paths this module owns. Agents are scoped to these globs and their
+# diffs are checked against them after every mission.
+
+name: Workspace & Git Worktrees
+purpose: "Two tightly related pieces: (1) `workspace/` — a typed, all-async
+  wrapper (`Workspace` class) around the project's `.swarm/` directory, which is
+  the durable, on-disk store of everything Swarm OS knows about a repo (config,
+  module map/ownership, per-module memory/decisions, swarm state, mission
+  records/logs); (2) `git/` — a thin wrapper around the `git` CLI plus
+  git-worktree lifecycle management, giving each agent an isolated checkout
+  under `.swarm/worktrees/` so parallel swarms never collide on the index or
+  working tree."
+owns:
+  - packages/core/src/workspace/**
+  - packages/core/src/git/**
+entryPoints:
+  - packages/core/src/workspace/store.ts
+  - packages/core/src/workspace/config.ts
+  - packages/core/src/git/worktree.ts
+dependsOn:
+  - runtime
+fileCount: 3

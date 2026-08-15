@@ -131,6 +131,52 @@ function dedupeSlugs(areas: AreaSpec[]): AreaSpec[] {
 }
 
 /**
+ * No longer used to gate splitting — that decision is structural now, driven
+ * by `detectAreas` alone. Kept as an export only because `index.ts` (owned by
+ * the `runtime` module) still re-exports it; remove both together once that
+ * module drops it.
+ */
+export const SPLIT_AT = 0.85;
+
+export interface AreaPlan {
+  /** The areas this module should have. Empty means: do not split it. */
+  keep: AreaSpec[];
+  /** Of those, the ones with nothing recorded yet — the only ones worth an agent. */
+  survey: AreaSpec[];
+}
+
+/**
+ * Decide whether a module's memory should be addressed per area, and what that
+ * costs in agents.
+ *
+ * The trigger is structural, not a measurement of memory.md: whether
+ * `detectAreas` found enough real sub-domains to be worth their own memory.
+ * That is answerable from the digest alone, before any agent — including the
+ * module's own analyst — has run and before memory.md exists at all, which a
+ * budget-percentage trigger cannot be on a first map. A module with no
+ * structure to split along needs a different remedy, not a worse split —
+ * `swarm refactor` reports that as `scattered-module`.
+ *
+ * Kept apart from the doing of it, and from every file it would need to read,
+ * because this is the part with the judgement in it.
+ */
+export function planAreas(input: {
+  areas: AreaSpec[];
+  /** Does this area already hold knowledge worth keeping? */
+  hasMemory: (slug: string) => boolean;
+  force?: boolean;
+}): AreaPlan {
+  const { areas, hasMemory } = input;
+
+  if (areas.length === 0) return { keep: [], survey: [] };
+
+  return {
+    keep: areas,
+    survey: input.force ? areas : areas.filter((a) => !hasMemory(a.slug)),
+  };
+}
+
+/**
  * An area, expressed as a module so the existing analyst can survey it.
  *
  * An area is the same shape of problem as a module — a bounded set of paths

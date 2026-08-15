@@ -1,0 +1,44 @@
+# Swarm OS project configuration.
+# Safe to commit — contains no credentials. Authentication is delegated
+# entirely to `claude auth` on each developer machine.
+
+version: 1
+runtime: claude-code-local
+model: sonnet
+systemModel: sonnet
+maxConcurrentAgents: 2
+memoryBudgetTokens: 2000
+permissionMode: acceptEdits
+worktreeRoot: .swarm/worktrees
+worktreeLinks:
+  - node_modules
+  - .venv
+  - venv
+  - vendor
+  - target
+  - .gradle
+codeStyle: |
+  Small files. If one file holds two things a reader would look for separately,
+  it is two files. Prefer many named modules over few large ones.
+
+  Types and behaviour split: a file that defines a shape and a file that acts on
+  it are different files.
+
+  Dependencies point inward and are passed in, never reached for. A unit that
+  constructs its own collaborator cannot be tested without them.
+
+  Tests describe behaviour, not implementation. A test that breaks when you
+  rename a private method is testing the wrong thing.
+contextFileIndex: 160
+verifyCommand: npm test
+verifyEnv: {}
+tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+pauseOnRateLimitStatus:
+  - rejected
+  - blocked

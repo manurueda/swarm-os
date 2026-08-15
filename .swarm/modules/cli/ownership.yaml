@@ -1,0 +1,38 @@
+# Paths this module owns. Agents are scoped to these globs and their
+# diffs are checked against them after every mission.
+
+name: CLI & Product Surface
+purpose: The user-facing CLI package (`@swarm-os/cli`, bin name `swarm`) plus
+  the repo's root docs/manifests. It parses argv, resolves a
+  Workspace/AgentRuntime/SwarmConfig context, and dispatches to one handler per
+  subcommand (map, status, mission, missions, memory, verify, refactor, ui,
+  sleep, wake, loop, doctor, update). All domain logic — mapping, mission
+  routing, orchestration, workspace/git, runtime — is imported wholesale from
+  the single package `@swarm-os/core`; this module contributes only argv
+  parsing, terminal rendering (a live in-place status board), a local HTTP
+  server for the live `swarm ui --serve` view, and self-update scheduling.
+owns:
+  - packages/cli/**
+  - README.md
+  - docs/**
+  - package.json
+  - package-lock.json
+  - tsconfig.base.json
+  - LICENSE
+  - .gitignore
+entryPoints:
+  - packages/cli/src/main.ts
+  - packages/cli/src/context.ts
+  - packages/cli/src/args.ts
+  - packages/cli/src/ui.ts
+  - packages/cli/src/server.ts
+  - docs/ARCHITECTURE.md
+dependsOn:
+  - runtime
+  - workspace-git
+  - mapper
+  - mission
+  - swarm-orchestration
+  - ui-observability
+  - architecture-analysis
+fileCount: 25

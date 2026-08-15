@@ -13,6 +13,8 @@ import { countLines, isCodeFile, isTestFile } from '../architecture/code-stats.j
 import { buildImportGraph, type ModuleEdge } from '../architecture/import-graph.js';
 import { computeSignals, type Signal } from '../architecture/signals.js';
 import { isOwned } from '../swarm/ownership.js';
+import { buildContextPack } from '../swarm/manager.js';
+import { agentBaselineTokens, CONTEXT_WINDOW } from '../runtime/baseline.js';
 import { extractClaims } from '../swarm/verify.js';
 import type { Claim } from '../swarm/analyst.js';
 import type { SwarmConfig } from '../workspace/config.js';
@@ -31,6 +33,12 @@ export interface ModuleView {
   /** Biggest files, for the "where is the mass" question. */
   largest: Array<{ path: string; lines: number }>;
   memoryTokens: number;
+  /**
+   * The context pack: everything an agent is handed when it wakes into this
+   * module. Bigger than memory alone — charter, system summary, file index,
+   * dependency contracts and code style ride along with it.
+   */
+  contextTokens: number;
   state: SwarmRecord['state'];
   lastMission?: string;
   invariants: Claim[];
@@ -69,6 +77,10 @@ export interface UiSnapshot {
   coverage: number;
   memoryTokens: number;
   memoryBudget: number;
+  /** Fixed cost of spawning a work agent here, before any context pack. */
+  baselineTokens: number;
+  /** The window all of the above has to fit inside. */
+  contextWindow: number;
   modules: ModuleView[];
   /** Signals not attached to any one module. */
   globalSignals: Signal[];
@@ -118,6 +130,13 @@ export async function buildSnapshot(
     const lines = code.reduce((sum, f) => sum + (linesByPath.get(f) ?? 0), 0);
     const text = memoryText.get(spec.slug) ?? '';
     const signals = analysis.signals.filter((s) => s.module === spec.slug);
+    // Built rather than estimated: the pack is what an agent actually receives,
+    // and guessing at it would defeat the point of showing it.
+    const pack = await buildContextPack(workspace, spec, {
+      files: owned,
+      codeStyle: config.codeStyle,
+      maxIndexFiles: config.contextFileIndex,
+    });
 
     modules.push({
       slug: spec.slug,
@@ -134,6 +153,7 @@ export async function buildSnapshot(
         .sort((a, b) => b.lines - a.lines)
         .slice(0, 6),
       memoryTokens: estimateTokens(text),
+      contextTokens: pack.tokens,
       state: state.swarms[spec.slug]?.state ?? 'sleeping',
       ...(state.swarms[spec.slug]?.lastMission
         ? { lastMission: state.swarms[spec.slug]?.lastMission }
@@ -184,6 +204,8 @@ export async function buildSnapshot(
     coverage: analysis.coverage,
     memoryTokens: modules.reduce((sum, m) => sum + m.memoryTokens, 0),
     memoryBudget: config.memoryBudgetTokens,
+    baselineTokens: agentBaselineTokens(config.tools.length),
+    contextWindow: CONTEXT_WINDOW,
     modules: modules.sort((a, b) => b.files - a.files),
     globalSignals: analysis.signals.filter((s) => !s.module),
     edges: imports.edges,

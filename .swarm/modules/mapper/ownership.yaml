@@ -1,0 +1,20 @@
+# Paths this module owns. Agents are scoped to these globs and their
+# diffs are checked against them after every mission.
+
+name: Repo Mapper
+purpose: Builds a deterministic, tokens-free structural digest of a target repo
+  and drives the four-stage `swarm map` pipeline (digest → partition → analyse →
+  synthesise) that turns it into a durable module map with per-module charters
+  and memory files under the workspace's `.swarm/` directory. Also detects when
+  a previously-generated map has drifted from the repo's current state.
+owns:
+  - packages/core/src/mapper/**
+entryPoints:
+  - packages/core/src/mapper/pipeline.ts
+  - packages/core/src/mapper/digest.ts
+  - packages/core/src/mapper/map.ts
+dependsOn:
+  - swarm-orchestration
+  - workspace-git
+  - runtime
+fileCount: 3

@@ -174,8 +174,8 @@ export async function createWorktree(options: {
   await mkdir(join(repoRoot, worktreeRoot), { recursive: true });
 
   if (existsSync(join(path, '.git'))) {
-    await linkDependencies(repoRoot, path, options.links ?? []);
-    return { path, branch, created: false };
+    const linked = await linkDependencies(repoRoot, path, options.links ?? []);
+    return { path, branch, created: false, linked };
   }
 
   const base = options.base ?? (await currentBranch(repoRoot));
@@ -202,14 +202,37 @@ export async function pruneWorktrees(repoRoot: string): Promise<void> {
   await git(repoRoot, ['worktree', 'prune']);
 }
 
-/** Files changed in a worktree relative to its base, staged or not. */
-export async function changedFiles(worktreePath: string, base: string): Promise<string[]> {
+/**
+ * Whether `path` is (or is under) one of the linked dependency directories.
+ *
+ * Linked entries are compared by top-level name, not by re-scanning the
+ * filesystem for symlinks — `linked` is the source of truth handed down from
+ * {@link linkDependencies}.
+ */
+function isLinkedPath(path: string, linked: string[]): boolean {
+  return linked.some((name) => path === name || path.startsWith(`${name}/`));
+}
+
+/**
+ * Files changed in a worktree relative to its base, staged or not.
+ *
+ * `linked` excludes the agent's own dependency symlinks (e.g. `node_modules`)
+ * from the result. A directory-style `.gitignore` pattern like `node_modules/`
+ * does not match a symlink of that name, so without this every mission would
+ * report its linked dependencies as changed — and, worse, as an ownership
+ * violation.
+ */
+export async function changedFiles(
+  worktreePath: string,
+  base: string,
+  linked: string[] = [],
+): Promise<string[]> {
   const tracked = await git(worktreePath, ['diff', '--name-only', base]);
   const untracked = await git(worktreePath, ['ls-files', '--others', '--exclude-standard']);
   const files = new Set<string>();
   for (const line of `${tracked.stdout}\n${untracked.stdout}`.split('\n')) {
     const trimmed = line.trim();
-    if (trimmed) files.add(trimmed);
+    if (trimmed && !isLinkedPath(trimmed, linked)) files.add(trimmed);
   }
   return [...files].sort();
 }
@@ -229,12 +252,33 @@ export async function fullDiff(worktreePath: string, base: string): Promise<stri
   return res.ok ? res.stdout : '';
 }
 
+/**
+ * Stage and commit everything in a worktree except its linked dependencies.
+ *
+ * `linked` (e.g. `['node_modules']`) must be kept out of the commit: it is a
+ * symlink this tool created, pointing at an absolute path on one machine, and
+ * a directory-style ignore rule like `node_modules/` does not match a symlink
+ * of that name.
+ *
+ * Staged in two steps rather than with an `:(exclude)` pathspec. Naming any
+ * explicit pathspec changes what `git add` does about ignored files: bare
+ * `git add -A` passes over them in silence, while `git add -A -- . :(exclude)x`
+ * fails the whole command with "the following paths are ignored". So the
+ * pathspec form worked only while the path was NOT ignored, and broke the
+ * moment someone fixed their `.gitignore` — which is how missions came to
+ * report branches ready for review with nothing committed to them.
+ */
 export async function commitAll(
   worktreePath: string,
   message: string,
+  linked: string[] = [],
 ): Promise<{ ok: boolean; detail: string }> {
   const add = await git(worktreePath, ['add', '-A']);
   if (!add.ok) return { ok: false, detail: add.stderr.trim() };
+  // Unstage rather than never-stage: a no-op when the path was ignored anyway.
+  for (const name of linked) {
+    await git(worktreePath, ['rm', '--cached', '-q', '--ignore-unmatch', '-r', '--', name]);
+  }
   const status = await git(worktreePath, ['status', '--porcelain']);
   if (status.stdout.trim() === '') return { ok: true, detail: 'nothing to commit' };
   const commit = await git(worktreePath, ['commit', '-m', message]);

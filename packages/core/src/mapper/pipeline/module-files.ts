@@ -1,0 +1,24 @@
+/**
+ * Which files a module owns, and the fingerprint of what is in them.
+ *
+ * This is the incremental-mapping primitive: two calls with the same file
+ * list and the same content fingerprints produce the same hash, so a module
+ * whose files have not moved can be skipped without re-reading anything.
+ */
+
+import { createHash } from 'node:crypto';
+
+import { isOwned } from '../../swarm/ownership.js';
+import type { RepoDigest } from '../digest.js';
+
+/** A module's fingerprint: which files it owns, and what is in each of them. */
+export function hashFiles(files: string[], prints?: Map<string, string>): string {
+  return createHash('sha256')
+    .update(files.map((f) => `${f}\u0000${prints?.get(f) ?? ''}`).join('\n'))
+    .digest('hex')
+    .slice(0, 16);
+}
+
+export function filesFor(digest: RepoDigest, globs: string[]): string[] {
+  return digest.files.filter((f) => isOwned(f, globs));
+}

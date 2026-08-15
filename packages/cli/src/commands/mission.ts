@@ -227,15 +227,31 @@ export async function missionCommand(args: ParsedArgs): Promise<number> {
     note('  Review these before merging — a module reached outside its own domain.');
   }
 
-  const branches = result.modules.filter((m) => m.branch && m.changedFiles.length > 0);
+  const worked = result.modules.filter((m) => m.branch && m.changedFiles.length > 0);
+  // A branch is only ready if the work actually reached it. Announcing one that
+  // failed to commit sends someone to `git diff` an empty branch and conclude
+  // the agent did nothing, when the work is sitting in the worktree.
+  const branches = worked.filter((m) => m.committed);
+  const stranded = worked.filter((m) => !m.committed);
+
   line();
   if (branches.length > 0) {
     ok(`${branches.length} branch(es) ready for review`);
     for (const m of branches) {
       note(`  git diff main..${m.branch}      ${m.changedFiles.length} files`);
     }
-  } else {
+  } else if (stranded.length === 0) {
     note('No files were changed.');
+  }
+
+  if (stranded.length > 0) {
+    line();
+    warn(`${stranded.length} module(s) changed files that could not be committed:`);
+    for (const m of stranded) {
+      note(`  ${m.module} — ${m.changedFiles.length} files, left in ${workspace.rel(m.worktree ?? '')}`);
+      if (m.commitError) note(`    ${clip(m.commitError, 100)}`);
+    }
+    note('  The work is in the worktree, not on the branch. Nothing was lost.');
   }
 
   line();

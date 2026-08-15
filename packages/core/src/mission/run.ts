@@ -181,6 +181,8 @@ export interface MissionModuleResult {
   diffStat?: string;
   review?: ModuleReview;
   committed?: boolean;
+  /** Why the commit failed, when it did. A branch is not ready without one. */
+  commitError?: string;
   contextTokens?: number;
   costUsd?: number;
   error?: string;
@@ -354,6 +356,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
     // Each agent gets its own checkout so parallel swarms cannot collide.
     let worktreePath = workspace.repoRoot;
     let branch: string | undefined;
+    let linked: string[] = [];
     if (repoIsGit) {
       try {
         const handle = await createWorktree({
@@ -366,6 +369,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
         });
         worktreePath = handle.path;
         branch = handle.branch;
+        linked = handle.linked ?? [];
       } catch (err) {
         return {
           module: spec.slug,
@@ -434,7 +438,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
 
     const workReport = parseWorkReport(outcome.structured);
 
-    const changed = repoIsGit ? await changedFiles(worktreePath, base) : [];
+    const changed = repoIsGit ? await changedFiles(worktreePath, base, linked) : [];
     const ownership = checkOwnership(changed, spec.owns);
     const stat = repoIsGit ? await diffStat(worktreePath, base) : '';
 
@@ -471,12 +475,17 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
     }
 
     let committed = false;
+    let commitError: string | undefined;
     if (repoIsGit && changed.length > 0) {
       const commit = await commitAll(
         worktreePath,
         `${spec.slug}: ${workReport?.summary?.split('\n')[0] ?? goal}`.slice(0, 100),
+        linked,
       );
       committed = commit.ok;
+      // A commit that fails silently is the worst outcome available: the work
+      // exists, the branch is announced as ready, and there is nothing on it.
+      if (!commit.ok) commitError = commit.detail;
     }
 
     report({
@@ -499,6 +508,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
       ...(stat ? { diffStat: stat } : {}),
       ...(review ? { review } : {}),
       committed,
+      ...(commitError ? { commitError } : {}),
       ...(outcome.usage ? { contextTokens: outcome.usage.contextTokens } : {}),
       ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
       ...(outcome.error ? { error: outcome.error } : {}),

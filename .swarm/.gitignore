@@ -1,0 +1,19 @@
+# Written by Swarm OS. Everything here is per-run or per-machine.
+# The module map, memories and config are NOT ignored — they are shared.
+
+# Disposable checkouts, one per agent per mission.
+worktrees/
+
+# Records of individual runs.
+missions/
+loop.log
+loop.json
+
+# Local swarm state and fingerprints — specific to this checkout.
+state.json
+
+# Generated on demand.
+view.html
+REFACTOR.md
+refactor.json
+archive/

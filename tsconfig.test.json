@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": ".test-build",
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": false
+  },
+  "include": ["packages/core/src/**/*.ts", "packages/cli/src/**/*.ts"]
+}
