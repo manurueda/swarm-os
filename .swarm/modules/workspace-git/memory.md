@@ -13,10 +13,12 @@ _Durable knowledge for the `workspace-git` swarm. Read on wake, rewritten on sle
 - verifyCommand defaults to '' meaning the merge gate is off until a project opts in; when empty, changes are kept on the reviewer's word alone. <sub>`packages/core/src/workspace/config.ts`</sub>
 - isWorkingTreeCleanIgnoringSwarm treats any status line whose path starts with '.swarm/' (after stripping the 2-char status prefix and optional quotes) as not counting toward dirtiness; anything else, tracked or untracked, blocks the loop. <sub>`packages/core/src/git/worktree.ts`</sub>
 - ensureSwarmIgnore fully rewrites .swarm/.gitignore on every call (not merged/preserved) — an older narrower version is exactly the bug this exists to fix, so callers must not assume user edits to that file persist. <sub>`packages/core/src/git/worktree.ts`</sub>
-- createWorktree reuses an existing worktree if `<path>/.git` exists (just re-linking dependencies), and reuses an existing branch by name if `git rev-parse --verify <branch>` succeeds; otherwise creates a new branch from `base` (defaults to currentBranch of repoRoot). <sub>`packages/core/src/git/worktree.ts`</sub>
+- createWorktree reuses an existing worktree if `<path>/.git` exists (just re-linking dependencies), and reuses an existing branch by name if `git rev-parse --verify <branch>` succeeds; otherwise creates a new branch from `base` (defaults to currentBranch of repoRoot). Both the reuse branch and the fresh-create branch now return `linked` from linkDependencies on the WorktreeHandle (the reuse branch previously discarded it — fixed). <sub>`packages/core/src/git/worktree.ts`</sub>
+- commitAll and changedFiles accept an optional third `linked: string[] = []` param that must be sourced from `WorktreeHandle.linked`, never re-derived by scanning for symlinks; omitting it preserves prior (unfiltered) behavior exactly. commitAll excludes linked paths via git pathspec magic (`git add -A -- . :(exclude)<name>` per linked entry), changedFiles via a post-filter on the combined tracked/untracked result — neither writes to or depends on the target repo's own .gitignore, since a conventional `node_modules/` (trailing-slash) ignore pattern matches a real directory but not a symlink. <sub>`packages/core/src/git/worktree.ts`</sub>
 
 ## Gotchas
 
+- **Fix incomplete in production as of 2026-08-15**: `packages/core/src/mission/run.ts` (the real caller of createWorktree/changedFiles/commitAll) still destructures only `handle.path`/`handle.branch`, discards `handle.linked`, and calls `changedFiles(worktreePath, base)` / `commitAll(worktreePath, message)` with no third argument. The new exclusion logic therefore never fires in real missions — the symlink-commit/ownership-violation bug is unfixed end-to-end until run.ts is updated to thread `handle.linked` through. Do not report this bug as fixed without checking that caller.
 - `ensureWorktreeIgnore` is a deprecated alias for `ensureSwarmIgnore` defined in worktree.ts but is not among the names re-exported from index.ts — only ensureSwarmIgnore is; consumers outside this module should use the new name. <sub>`packages/core/src/git/worktree.ts`</sub>
 - Workspace.find() only recognizes a repo as a workspace if `.swarm/config.yaml` exists on disk — an initialized-but-not-yet-configured `.swarm/` dir (e.g. only state.json) will not be found. <sub>`packages/core/src/workspace/store.ts`</sub>
 - readModule/readState/readConfig/readModuleFile/readSystem(File)/readMission/readAreaFile all swallow errors and return an empty/default value rather than throwing — callers cannot distinguish 'absent' from 'malformed' from 'unreadable'. <sub>`packages/core/src/workspace/store.ts`</sub>
@@ -33,6 +35,7 @@ _Durable knowledge for the `workspace-git` swarm. Read on wake, rewritten on sle
 - `packages/core/src/workspace/config.ts` — SwarmConfig type + DEFAULT_CONFIG + parseConfig/serializeConfig for .swarm/config.yaml.
 - `packages/core/src/git/worktree.ts` — git() exec wrapper, isWorkingTreeClean(IgnoringSwarm), createWorktree/removeWorktree/pruneWorktrees, linkDependencies, changedFiles/diffStat/fullDiff, commitAll, ensureSwarmIgnore.
 - `packages/core/src/git/clean-tree.test.ts` — Regression tests pinning the exact semantics of isWorkingTreeCleanIgnoringSwarm (the check `swarm loop` gates on).
+- `packages/core/src/git/linked-paths.test.ts` — Real temporary-git-repo tests (no mocking) proving a symlinked `linked` path (e.g. node_modules) is excluded from commitAll's commit and changedFiles' report, while genuine tracked files still commit/report normally.
 - `packages/core/src/workspace/config.test.ts` — Pins config round-trip and 'malformed input -> defaults' behavior, and that verifyCommand defaults to '' (verify gate off by default).
 
 ## Public interface
@@ -41,9 +44,10 @@ _Durable knowledge for the `workspace-git` swarm. Read on wake, rewritten on sle
 - SWARM_DIR, estimateTokens
 - ModuleFile, StateFile, MemoryArea (types)
 - SwarmConfig (type), DEFAULT_CONFIG, parseConfig, serializeConfig
-- git, isGitRepo, currentBranch, isWorkingTreeClean, isWorkingTreeCleanIgnoringSwarm, ensureSwarmIgnore, createWorktree, linkDependencies, removeWorktree, pruneWorktrees, changedFiles, diffStat, fullDiff, commitAll
-- WorktreeHandle, GitResult (types)
+- git, isGitRepo, currentBranch, isWorkingTreeClean, isWorkingTreeCleanIgnoringSwarm, ensureSwarmIgnore, createWorktree, linkDependencies, removeWorktree, pruneWorktrees
+- changedFiles(worktreePath, base, linked?: string[]), diffStat, fullDiff, commitAll(worktreePath, message, linked?: string[]) — `linked` should be sourced from `WorktreeHandle.linked`
+- WorktreeHandle (includes `linked: string[]`), GitResult (types)
 
 ---
 
-_Surveyed 2026-08-15 by the `workspace-git` analyst, reading only this module's paths._
+_Surveyed 2026-08-15 by the `workspace-git` analyst; last mission added optional `linked` param to commitAll/changedFiles (fix not yet wired into `mission/run.ts` — see gotchas)._
