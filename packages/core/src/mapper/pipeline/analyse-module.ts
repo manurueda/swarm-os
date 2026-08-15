@@ -39,10 +39,6 @@ export interface AnalyseModuleArgs {
    * ran ahead of this call and found real sub-domains. Non-empty tells the
    * analyst per-area memory exists, so it should write cross-area facts only
    * — anything specific to one area belongs in that area's own memory.md.
-   *
-   * `analyzeModule` (swarm-orchestration) has no dedicated slot for this yet,
-   * so it rides along in `systemSummary`, the one free-text field the prompt
-   * already exposes.
    */
   areaNames?: string[];
   model?: string;
@@ -71,7 +67,13 @@ export async function analyseModule(args: AnalyseModuleArgs): Promise<ModuleAnal
     repoRoot: workspace.repoRoot,
     module: entry.spec,
     siblings,
-    systemSummary: areaNamesNote(systemSummary, areaNames),
+    systemSummary,
+    // Passed as a field rather than appended to systemSummary. Two agents built
+    // both ends of this in parallel and could not see each other: the mapper
+    // smuggled it through the summary text because it had no way to know the
+    // analyst was growing a real parameter for it. Now that both halves are
+    // here, the summary goes back to being only the summary.
+    ...(areaNames && areaNames.length > 0 ? { areaNames } : {}),
     ...(model ? { model } : {}),
     ...(onEvent ? { onEvent } : {}),
     ...(signal ? { signal } : {}),
@@ -123,15 +125,3 @@ export async function analyseModule(args: AnalyseModuleArgs): Promise<ModuleAnal
   };
 }
 
-/** Appended only to the prompt sent to the agent — never to the persisted charter. */
-function areaNamesNote(systemSummary: string, areaNames: string[] | undefined): string {
-  if (!areaNames || areaNames.length === 0) return systemSummary;
-  return [
-    systemSummary,
-    '',
-    `This module's memory is already split by area: ${areaNames.join(', ')}. Each area keeps its ` +
-      'own memory.md for what is specific to it. Write module-level memory (invariants, gotchas, ' +
-      'landmarks) that holds true ACROSS every area — leave anything true of only one area to that ' +
-      "area's own file.",
-  ].join('\n');
-}

@@ -168,8 +168,15 @@ test('areaNames tells the analyst per-area memory exists, without touching the p
   });
 
   assert.equal(outcome.status, 'analysed');
-  assert.match(prompts[0] ?? '', /already split by area: billing-invoices, billing-refunds/);
-  assert.match(prompts[0] ?? '', /ACROSS every area/);
+  // Delivered as a real parameter now, so what reaches the agent is the
+  // analyst's own wording rather than a note appended to the system summary.
+  assert.match(prompts[0] ?? '', /billing-invoices, billing-refunds/);
+  assert.match(prompts[0] ?? '', /true across every area/i);
+  assert.doesNotMatch(
+    prompts[0] ?? '',
+    /A billing system\.\n\nThis module's memory is already split/,
+    'the area signal must not be smuggled through systemSummary',
+  );
 
   const charter = await workspace.readModuleFile('billing', 'module.md');
   assert.doesNotMatch(charter, /already split by area/, 'the note is prompt-only, never persisted');
