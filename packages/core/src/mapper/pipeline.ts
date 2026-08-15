@@ -12,97 +12,42 @@
  * leaves the rest — and all accumulated memory — untouched. This is what makes
  * it reasonable to re-analyse whenever you sit down to work: the cost is
  * proportional to what moved, not to the size of the repo.
+ *
+ * mapProject itself is only an orchestrator: every decision below lives in its
+ * own file under `pipeline/`, taking its dependencies as explicit arguments
+ * rather than closing over this function's locals. That is what lets each one
+ * be tested — and what makes a step that is defined but never called visible:
+ * it shows up as a file nothing else imports, not as dead code buried in a
+ * closure.
  */
 
-import { createHash } from 'node:crypto';
-
-import type { AgentRuntime, ModuleSpec, SwarmEvent } from '../types.js';
-import { findOwnershipConflicts, isOwned, type OwnershipConflict } from '../swarm/ownership.js';
+import type { SwarmEvent } from '../types.js';
+import { findOwnershipConflicts } from '../swarm/ownership.js';
 import { Scheduler } from '../swarm/scheduler.js';
-import {
-  analyzeModule,
-  renderCharter,
-  renderMemory,
-  type ModuleAnalysis,
-} from '../swarm/analyst.js';
-import { areaAsModule, detectAreas, planAreas } from '../swarm/areas.js';
+import { detectAreas, planAreas } from '../swarm/areas.js';
 import { Workspace, estimateTokens } from '../workspace/store.js';
 import type { SwarmConfig } from '../workspace/config.js';
-import { buildDigest, type RepoDigest } from './digest.js';
-import { mapRepository, renderSystemMap } from './map.js';
+import { buildDigest } from './digest.js';
+import { areasWithMemory } from './pipeline/areas-with-memory.js';
+import { analyseModule } from './pipeline/analyse-module.js';
+import { archiveStaleModules } from './pipeline/archive-stale-modules.js';
+import { buildNextState } from './pipeline/build-next-state.js';
+import { countAreasByModule } from './pipeline/count-areas-by-module.js';
+import { filesFor, hashFiles } from './pipeline/module-files.js';
+import { loadReusedModuleResult } from './pipeline/load-reused-module.js';
+import { orderModuleResults } from './pipeline/order-module-results.js';
+import { planModuleAnalysis } from './pipeline/plan-module-analysis.js';
+import { pruneStaleHashes } from './pipeline/prune-stale-hashes.js';
+import { recordModuleProgress } from './pipeline/record-module-progress.js';
+import { resolveFinalModules } from './pipeline/resolve-final-modules.js';
+import { resolvePartition } from './pipeline/resolve-partition.js';
+import { createSerialQueue } from './pipeline/serial-queue.js';
+import { shouldPartition as decidePartition } from './pipeline/should-partition.js';
+import { surveyModuleAreas } from './pipeline/survey-module-areas.js';
+import { synthesiseSystemMap } from './pipeline/synthesise-system-map.js';
+import type { MapModuleResult, MapProgress, MapProjectOptions, MapResult } from './pipeline/types.js';
 
-export type MapPhase = 'digest' | 'partition' | 'analyse' | 'synthesise';
-
-export interface MapProgress {
-  phase: MapPhase;
-  message: string;
-  /** Present during the analyse phase. */
-  module?: string;
-  done?: number;
-  total?: number;
-}
-
-export interface MapModuleResult {
-  spec: ModuleSpec;
-  status: 'analysed' | 'reused' | 'failed';
-  analysis?: ModuleAnalysis;
-  memoryTokens?: number;
-  error?: string;
-  costUsd?: number;
-}
-
-export interface MapResult {
-  repoName: string;
-  totalFiles: number;
-  modules: MapModuleResult[];
-  system: { summary: string; stack: string };
-  /** True when the partition step ran; false when an existing map was reused. */
-  repartitioned: boolean;
-  digestHash: string;
-  costUsd: number;
-  /** Combined size of every module's memory — the cost of keeping this repo mapped. */
-  totalMemoryTokens: number;
-  /** Modules moved to `.swarm/archive/` because the map no longer has them. */
-  archived: string[];
-  /** Module slug -> number of areas its memory was split into. */
-  areas: Record<string, number>;
-  /** Modules claiming the same files, decided against the real file list. */
-  conflicts: OwnershipConflict[];
-}
-
-/** A module's fingerprint: which files it owns, and what is in each of them. */
-function hashFiles(files: string[], prints?: Map<string, string>): string {
-  return createHash('sha256')
-    .update(files.map((f) => `${f}\u0000${prints?.get(f) ?? ''}`).join('\n'))
-    .digest('hex')
-    .slice(0, 16);
-}
-
-function filesFor(digest: RepoDigest, globs: string[]): string[] {
-  return digest.files.filter((f) => isOwned(f, globs));
-}
-
-export interface MapProjectOptions {
-  runtime: AgentRuntime;
-  workspace: Workspace;
-  config: SwarmConfig;
-  /** Re-partition and re-analyse everything, discarding the existing map. */
-  force?: boolean;
-  /** Re-partition boundaries but keep memory where module slugs survive. */
-  repartition?: boolean;
-  onProgress?: (progress: MapProgress) => void;
-  onEvent?: (event: SwarmEvent) => void | Promise<void>;
-  signal?: AbortSignal;
-}
-
-/** Areas of a module that already hold knowledge worth not overwriting. */
-async function areasWithMemory(workspace: Workspace, slug: string): Promise<Set<string>> {
-  const recorded = new Set<string>();
-  for (const area of await workspace.listAreas(slug)) {
-    if ((await workspace.readAreaFile(slug, area)).trim()) recorded.add(area);
-  }
-  return recorded;
-}
+export type { MapPhase, MapProgress, MapModuleResult, MapResult, MapProjectOptions } from './pipeline/types.js';
 
 /**
  * Modules whose memory has outgrown what every agent should have to load, and
@@ -150,66 +95,32 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
 
   const state = await workspace.readState();
   const existing = await workspace.listModules();
-
-  const shouldPartition =
-    options.force === true ||
-    options.repartition === true ||
-    existing.length === 0;
+  const partition = decidePartition(options, existing.length);
 
   // -- 2. Partition ---------------------------------------------------------
-  let modules: ModuleSpec[];
-  let system: { summary: string; stack: string };
-
-  if (shouldPartition) {
-    report({ phase: 'partition', message: 'proposing module boundaries from the digest' });
-    const mapped = await mapRepository({
-      runtime,
-      repoRoot: workspace.repoRoot,
-      ...(config.systemModel ? { model: config.systemModel } : {}),
-      ...(options.onEvent ? { onEvent: options.onEvent } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
-    modules = mapped.modules;
-    system = mapped.system;
-    report({
-      phase: 'partition',
-      message: `${modules.length} modules proposed: ${modules.map((m) => m.slug).join(', ')}`,
-    });
-  } else {
-    modules = existing;
-    system = state.system ?? { summary: '', stack: '' };
-    report({
-      phase: 'partition',
-      message: `reusing existing map (${modules.length} modules) — pass --repartition to redraw boundaries`,
-    });
-  }
+  const { modules, system } = await resolvePartition({
+    partition,
+    runtime,
+    repoRoot: workspace.repoRoot,
+    ...(config.systemModel ? { model: config.systemModel } : {}),
+    ...(options.onEvent ? { onEvent: options.onEvent } : {}),
+    ...(options.signal ? { signal: options.signal } : {}),
+    existingModules: existing,
+    existingSystem: state.system ?? { summary: '', stack: '' },
+    report,
+  });
 
   // Repartitioning changes the slug set. Old module directories left behind
   // would be returned by listModules() alongside the new ones.
-  let archived: string[] = [];
-  if (shouldPartition) {
-    archived = await workspace.archiveModulesNotIn(
-      modules.map((m) => m.slug),
-      new Date().toISOString().slice(0, 10),
-    );
-    if (archived.length > 0) {
-      report({
-        phase: 'partition',
-        message: `archived ${archived.length} module(s) no longer in the map: ${archived.join(', ')}`,
-      });
-    }
-  }
+  const archived: string[] = partition
+    ? await archiveStaleModules(workspace, modules, new Date().toISOString().slice(0, 10), report)
+    : [];
 
   // -- 3. Analyse -----------------------------------------------------------
   const previousHashes = state.moduleHashes ?? {};
   const siblings = modules.map((m) => ({ slug: m.slug, purpose: m.purpose }));
 
-  const plan = modules.map((spec) => {
-    const owned = filesFor(digest, spec.owns);
-    const hash = hashFiles(owned, digest.fingerprints);
-    const unchanged = !options.force && previousHashes[spec.slug] === hash;
-    return { spec: { ...spec, fileCount: owned.length }, hash, unchanged };
-  });
+  const plan = modules.map((spec) => planModuleAnalysis(digest, spec, previousHashes, options.force === true));
 
   const toAnalyse = plan.filter((p) => !p.unchanged);
   const reused = plan.filter((p) => p.unchanged);
@@ -223,12 +134,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
 
   const results = new Map<string, MapModuleResult>();
   for (const entry of reused) {
-    const memory = await workspace.readModuleFile(entry.spec.slug, 'memory.md');
-    results.set(entry.spec.slug, {
-      spec: entry.spec,
-      status: 'reused',
-      memoryTokens: estimateTokens(memory),
-    });
+    results.set(entry.spec.slug, await loadReusedModuleResult(workspace, entry));
   }
 
   let done = 0;
@@ -258,82 +164,8 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
 
   const generatedAt = new Date().toISOString().slice(0, 10);
   let costUsd = 0;
-
-  /**
-   * Give an oversized module per-area memory.
-   *
-   * The trigger is the module's memory saturating its budget while covering
-   * several sub-domains — the measured condition where each sub-domain gets
-   * ~170 tokens and an agent loads mostly things it will never touch.
-   */
-  const surveyAreas = async (spec: ModuleSpec, memoryTokens: number): Promise<void> => {
-    const recorded = await areasWithMemory(workspace, spec.slug);
-    const areaPlan = planAreas({
-      areas: detectAreas(spec, digest.files),
-      memoryTokens,
-      budgetTokens: config.memoryBudgetTokens,
-      hasMemory: (slug) => recorded.has(slug),
-      ...(options.force ? { force: true } : {}),
-    });
-
-    await workspace.pruneAreas(spec.slug, areaPlan.keep.map((a) => a.slug));
-    if (areaPlan.survey.length === 0) return;
-
-    report({
-      phase: 'analyse',
-      message: `splitting into ${areaPlan.keep.length} areas`,
-      module: spec.slug,
-    });
-
-    const surveys = await scheduler.run(
-      areaPlan.survey.map((area) => async () => {
-        const { analysis } = await analyzeModule({
-          runtime,
-          repoRoot: workspace.repoRoot,
-          module: areaAsModule(spec, area),
-          siblings: areaPlan.keep
-            .filter((a) => a.slug !== area.slug)
-            .map((a) => ({ slug: a.slug, purpose: `the ${a.slug} area (${a.path})` })),
-          systemSummary: spec.purpose,
-          ...(config.systemModel ? { model: config.systemModel } : {}),
-          onEvent: forward,
-          ...(options.signal ? { signal: options.signal } : {}),
-        });
-        if (!analysis) throw new Error(`area ${area.slug} returned nothing`);
-        return { area, analysis };
-      }),
-    );
-
-    for (const survey of surveys) {
-      if (survey instanceof Error || !survey) continue;
-      await workspace.writeAreaFile(
-        spec.slug,
-        survey.area.slug,
-        'area.json',
-        `${JSON.stringify(survey.area, null, 2)}\n`,
-      );
-      await workspace.writeAreaFile(
-        spec.slug,
-        survey.area.slug,
-        'memory.md',
-        renderMemory(areaAsModule(spec, survey.area), survey.analysis, generatedAt),
-      );
-    }
-  };
   const moduleHashes: Record<string, string> = { ...previousHashes };
-
-  // state.json is a read-modify-write shared by every analyst, so serialize
-  // updates. Module directories are per-module and need no such protection.
-  let stateWrites: Promise<void> = Promise.resolve();
-  const recordProgress = (slug: string, hash: string, memoryTokens: number): Promise<void> => {
-    stateWrites = stateWrites.then(async () => {
-      const current = await workspace.readState();
-      current.moduleHashes = { ...(current.moduleHashes ?? {}), [slug]: hash };
-      current.swarms[slug] = { module: slug, state: 'sleeping', memoryTokens };
-      await workspace.writeState(current);
-    });
-    return stateWrites;
-  };
+  const stateQueue = createSerialQueue();
 
   await scheduler.run(
     toAnalyse.map((entry) => async () => {
@@ -345,15 +177,17 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
         total: toAnalyse.length,
       });
 
-      const { analysis, outcome } = await analyzeModule({
+      const outcome = await analyseModule({
         runtime,
-        repoRoot: workspace.repoRoot,
-        module: entry.spec,
+        workspace,
+        digest,
+        entry,
         siblings: siblings.filter((s) => s.slug !== entry.spec.slug),
         systemSummary: system.summary,
         ...(config.systemModel ? { model: config.systemModel } : {}),
         onEvent: forward,
         ...(options.signal ? { signal: options.signal } : {}),
+        generatedAt,
       });
 
       done += 1;
@@ -361,7 +195,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
       // Persist the moment this analyst returns, not after all of them do.
       // A long map on a large repo is then durable and inspectable while it
       // runs, and an interrupted one keeps every module that finished.
-      if (!analysis) {
+      if (outcome.status === 'failed') {
         report({
           phase: 'analyse',
           message: 'survey failed',
@@ -369,73 +203,37 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
           done,
           total: toAnalyse.length,
         });
-        // Write the structural spec so the module exists and can be retried,
-        // but record no hash — it must be re-analysed next time.
-        await workspace.writeModule(
-          entry.spec,
-          renderStructuralCharter(entry.spec, system.summary),
-        );
         // Drop any hash this module carried from an earlier map. Inheriting one
         // makes the next run consider it up to date, so a module that failed is
         // never retried until something else in it happens to change.
         delete moduleHashes[entry.spec.slug];
-        results.set(entry.spec.slug, {
-          spec: entry.spec,
-          status: 'failed',
-          error: outcome.error ?? 'analyst returned no structured result',
-        });
+        results.set(entry.spec.slug, { spec: outcome.spec, status: 'failed', error: outcome.error });
         return;
       }
 
-      // An analyst that corrects its globs changes which files it owns, so the
-      // count computed before it ran is stale. Left uncorrected this reports
-      // modules as owning zero files while they demonstrably own several.
-      const owns = analysis.correctedOwns ?? entry.spec.owns;
-      const ownedNow = filesFor(digest, owns);
-
-      const spec: ModuleSpec = {
-        ...entry.spec,
-        purpose: analysis.purpose || entry.spec.purpose,
-        owns,
-        fileCount: ownedNow.length,
-        entryPoints:
-          analysis.entryPoints.length > 0
-            ? analysis.entryPoints.map((e) => e.path)
-            : entry.spec.entryPoints,
-        dependsOn: analysis.dependsOn.length > 0 ? analysis.dependsOn : entry.spec.dependsOn,
-      };
-
-      await workspace.writeModule(spec, renderCharter(spec, analysis, system.summary));
-      const memory = renderMemory(spec, analysis, generatedAt);
-      await workspace.writeModuleFile(spec.slug, 'memory.md', memory);
-
-      const memoryTokens = estimateTokens(memory);
-      const hash = analysis.correctedOwns ? hashFiles(ownedNow, digest.fingerprints) : entry.hash;
-      moduleHashes[spec.slug] = hash;
+      moduleHashes[outcome.spec.slug] = outcome.hash;
       costUsd += outcome.costUsd ?? 0;
-      await recordProgress(spec.slug, hash, memoryTokens);
+      await recordModuleProgress(workspace, stateQueue, outcome.spec.slug, outcome.hash, outcome.memoryTokens);
 
-      results.set(spec.slug, {
-        spec,
+      results.set(outcome.spec.slug, {
+        spec: outcome.spec,
         status: 'analysed',
-        analysis,
-        memoryTokens,
+        analysis: outcome.analysis,
+        memoryTokens: outcome.memoryTokens,
         ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
       });
 
       report({
         phase: 'analyse',
         message: 'surveyed',
-        module: spec.slug,
+        module: outcome.spec.slug,
         done,
         total: toAnalyse.length,
       });
     }),
   );
 
-  await stateWrites;
-
-  const finalModules = modules.map((m) => results.get(m.slug)?.spec ?? m);
+  const finalModules = resolveFinalModules(modules, results);
 
   // -- 3b. Areas ------------------------------------------------------------
   // Over EVERY module, not only the ones just re-analysed. A module that is
@@ -443,94 +241,55 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
   // splitting, and the incremental path skips it by definition — which is how
   // this step could be written, wired at both ends, and never once run.
   //
-  // Sequentially, because surveyAreas fans its own areas out across the
+  // Sequentially, because surveyModuleAreas fans its own areas out across the
   // scheduler; overlapping those pools would exceed maxConcurrentAgents.
   for (const spec of finalModules) {
     const known = results.get(spec.slug)?.memoryTokens;
     const memoryTokens =
       known ?? estimateTokens(await workspace.readModuleFile(spec.slug, 'memory.md'));
-    await surveyAreas(spec, memoryTokens);
+    await surveyModuleAreas({
+      runtime,
+      workspace,
+      scheduler,
+      spec,
+      memoryTokens,
+      budgetTokens: config.memoryBudgetTokens,
+      repoFiles: digest.files,
+      force: options.force === true,
+      ...(config.systemModel ? { model: config.systemModel } : {}),
+      onEvent: forward,
+      ...(options.signal ? { signal: options.signal } : {}),
+      generatedAt,
+      report,
+    });
   }
 
   // -- 4. Synthesise --------------------------------------------------------
   report({ phase: 'synthesise', message: 'writing system map' });
-
-  await workspace.writeSystem(renderSystemMap(system, finalModules, digest));
+  await synthesiseSystemMap(workspace, system, finalModules, digest);
 
   // Prune hashes for modules that no longer exist.
-  for (const slug of Object.keys(moduleHashes)) {
-    if (!finalModules.some((m) => m.slug === slug)) delete moduleHashes[slug];
-  }
+  const finalHashes = pruneStaleHashes(moduleHashes, finalModules);
 
-  const nextState = {
-    ...state,
-    swarms: state.swarms,
-    mappedAt: new Date().toISOString(),
-    digestHash: digest.hash,
-    moduleHashes,
-    system,
-  };
-  for (const slug of Object.keys(nextState.swarms)) {
-    if (!finalModules.some((m) => m.slug === slug)) delete nextState.swarms[slug];
-  }
-  // Every module starts asleep. Mapping does not leave processes running.
-  for (const spec of finalModules) {
-    const current = nextState.swarms[spec.slug];
-    nextState.swarms[spec.slug] = {
-      module: spec.slug,
-      state: 'sleeping',
-      memoryTokens: results.get(spec.slug)?.memoryTokens ?? current?.memoryTokens ?? 0,
-      ...(current?.lastMission ? { lastMission: current.lastMission } : {}),
-      ...(current?.lastActiveAt ? { lastActiveAt: current.lastActiveAt } : {}),
-    };
-  }
+  const mappedAt = new Date().toISOString();
+  const nextState = buildNextState(state, digest.hash, finalHashes, system, finalModules, mappedAt, results);
   await workspace.writeState(nextState);
 
-  const ordered = finalModules.map(
-    (m) => results.get(m.slug) ?? { spec: m, status: 'failed' as const, error: 'not processed' },
-  );
+  const ordered = orderModuleResults(finalModules, results);
 
   return {
     repoName: digest.repoName,
     totalFiles: digest.totalFiles,
     modules: ordered,
     system,
-    repartitioned: shouldPartition,
+    repartitioned: partition,
     digestHash: digest.hash,
     costUsd,
     totalMemoryTokens: ordered.reduce((sum, m) => sum + (m.memoryTokens ?? 0), 0),
     conflicts: findOwnershipConflicts(finalModules, digest.files),
     archived,
-    areas: Object.fromEntries(
-      await Promise.all(
-        finalModules.map(
-          async (m) => [m.slug, (await workspace.listAreas(m.slug)).length] as const,
-        ),
-      ).then((pairs) => pairs.filter(([, n]) => n > 0)),
-    ),
+    areas: await countAreasByModule(workspace, finalModules),
   };
-}
-
-/** Fallback charter when a module's analyst failed — structure only, no findings. */
-function renderStructuralCharter(spec: ModuleSpec, systemSummary: string): string {
-  return [
-    `# ${spec.name}`,
-    '',
-    spec.purpose,
-    '',
-    '## Owns',
-    '',
-    ...spec.owns.map((g) => `- \`${g}\``),
-    '',
-    '## System context',
-    '',
-    systemSummary || '_Not recorded._',
-    '',
-    '---',
-    '',
-    '_This module\'s analyst did not complete. Re-run `swarm map` to survey it._',
-    '',
-  ].join('\n');
 }
 
 /**
