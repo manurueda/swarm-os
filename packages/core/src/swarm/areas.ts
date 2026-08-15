@@ -131,11 +131,10 @@ function dedupeSlugs(areas: AreaSpec[]): AreaSpec[] {
 }
 
 /**
- * The fraction of its budget a module's memory may reach before its knowledge
- * is addressed per area instead of loaded whole.
- *
- * Below 100% on purpose. At the budget the compressor has already begun cutting
- * to fit, and what it cut is gone — splitting then preserves nothing.
+ * No longer used to gate splitting — that decision is structural now, driven
+ * by `detectAreas` alone. Kept as an export only because `index.ts` (owned by
+ * the `runtime` module) still re-exports it; remove both together once that
+ * module drops it.
  */
 export const SPLIT_AT = 0.85;
 
@@ -150,23 +149,26 @@ export interface AreaPlan {
  * Decide whether a module's memory should be addressed per area, and what that
  * costs in agents.
  *
+ * The trigger is structural, not a measurement of memory.md: whether
+ * `detectAreas` found enough real sub-domains to be worth their own memory.
+ * That is answerable from the digest alone, before any agent — including the
+ * module's own analyst — has run and before memory.md exists at all, which a
+ * budget-percentage trigger cannot be on a first map. A module with no
+ * structure to split along needs a different remedy, not a worse split —
+ * `swarm refactor` reports that as `scattered-module`.
+ *
  * Kept apart from the doing of it, and from every file it would need to read,
  * because this is the part with the judgement in it.
  */
 export function planAreas(input: {
   areas: AreaSpec[];
-  memoryTokens: number;
-  budgetTokens: number;
   /** Does this area already hold knowledge worth keeping? */
   hasMemory: (slug: string) => boolean;
   force?: boolean;
 }): AreaPlan {
-  const { areas, memoryTokens, budgetTokens, hasMemory } = input;
+  const { areas, hasMemory } = input;
 
-  const underPressure = budgetTokens > 0 && memoryTokens >= budgetTokens * SPLIT_AT;
-  // A module with no structure to split along needs a different remedy, not a
-  // worse split — `swarm refactor` reports that as `scattered-module`.
-  if (!underPressure || areas.length === 0) return { keep: [], survey: [] };
+  if (areas.length === 0) return { keep: [], survey: [] };
 
   return {
     keep: areas,
