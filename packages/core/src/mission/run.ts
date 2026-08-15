@@ -354,6 +354,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
     // Each agent gets its own checkout so parallel swarms cannot collide.
     let worktreePath = workspace.repoRoot;
     let branch: string | undefined;
+    let linked: string[] = [];
     if (repoIsGit) {
       try {
         const handle = await createWorktree({
@@ -366,6 +367,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
         });
         worktreePath = handle.path;
         branch = handle.branch;
+        linked = handle.linked ?? [];
       } catch (err) {
         return {
           module: spec.slug,
@@ -434,7 +436,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
 
     const workReport = parseWorkReport(outcome.structured);
 
-    const changed = repoIsGit ? await changedFiles(worktreePath, base) : [];
+    const changed = repoIsGit ? await changedFiles(worktreePath, base, linked) : [];
     const ownership = checkOwnership(changed, spec.owns);
     const stat = repoIsGit ? await diffStat(worktreePath, base) : '';
 
@@ -475,6 +477,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
       const commit = await commitAll(
         worktreePath,
         `${spec.slug}: ${workReport?.summary?.split('\n')[0] ?? goal}`.slice(0, 100),
+        linked,
       );
       committed = commit.ok;
     }
