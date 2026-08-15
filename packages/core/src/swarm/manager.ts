@@ -11,11 +11,15 @@
  */
 
 import type { AgentRuntime, ModuleSpec, SwarmEvent, SwarmRecord } from '../types.js';
-import { collectAgent } from '../runtime/collect.js';
-import { standaloneSystemPrompt } from '../runtime/system-tier.js';
 import { estimateTokens, Workspace } from '../workspace/store.js';
 import { renderAreaIndex, type AreaSpec } from './areas.js';
-import { mergeAreaMemory, splitAreaSections } from './area-memory.js';
+import { splitAreaSections } from './area-memory.js';
+import { readMemoryState } from './memory-state.js';
+import { shouldSkipCompression } from './compression-budget.js';
+import { buildCompressorPrompt } from './compressor-prompt.js';
+import { runCompressorAgent } from './compressor-agent.js';
+import { fileAreaSections } from './file-area-sections.js';
+import { writeMemoryAndUpdateState } from './finalize-sleep.js';
 
 /**
  * The context an agent receives when it wakes into a module: the system's
@@ -213,44 +217,6 @@ export interface SleepResult {
   note?: string;
 }
 
-const COMPRESSOR_CHARTER = `You are the Swarm OS memory compressor.
-
-You rewrite one module's memory file so the next agent to wake into this module
-starts as informed as possible for as few tokens as possible.
-
-You will be given the existing memory, plus what just happened in a mission.
-Produce the new memory file — not a diff, not a summary of your edits, the
-complete replacement text.
-
-Rules:
-- Merge new knowledge in. Do not simply append; integrate.
-- Delete anything the mission proved wrong.
-- Delete anything a future agent could rediscover in ten seconds.
-- Keep invariants and gotchas above everything else — they are the expensive
-  knowledge, the kind that costs a wasted mission to relearn.
-- Preserve the existing section structure exactly: Invariants, Gotchas,
-  Landmarks, Public interface.
-- Never exceed the stated token budget. If you must cut, cut landmarks first,
-  then public interface. Never cut an invariant to fit.
-
-When you are told this module's memory is split by area, this file is the part
-EVERY agent loads whatever it is working on, so it holds only what is true
-across areas. A fact that belongs to one area is not dropped — you move it, by
-writing it under a heading of exactly this form, after all the normal sections:
-
-    ## Area: <area-slug>
-
-    - the fact <sub>\`path/to/file\`</sub>
-
-Everything under such a heading is filed into that area's own memory and read
-only by an agent working there. That is where the budget headroom comes from,
-so prefer moving a specific fact over cutting it. Facts under an area heading
-do not count against the budget.
-- Write facts, not narrative. No "we decided", no "the agent found". Just what
-  is true about this code.
-
-Output the markdown file and nothing else.`;
-
 export async function sleepSwarm(options: {
   workspace: Workspace;
   runtime: AgentRuntime;
@@ -264,17 +230,12 @@ export async function sleepSwarm(options: {
 }): Promise<SleepResult> {
   const { workspace, slug, budgetTokens } = options;
 
-  const before = await workspace.readModuleFile(slug, 'memory.md');
-  const beforeTokens = estimateTokens(before);
+  const { before, beforeTokens } = await readMemoryState(workspace, slug);
 
   // Nothing new happened and memory is already within budget — sleeping is
   // then just a state change, and should not cost a model call.
-  if (!options.missionReport && beforeTokens <= budgetTokens) {
-    const record = await workspace.updateSwarm(slug, {
-      state: 'sleeping',
-      memoryTokens: beforeTokens,
-      lastActiveAt: new Date().toISOString(),
-    });
+  if (shouldSkipCompression(options.missionReport, beforeTokens, budgetTokens)) {
+    const record = await writeMemoryAndUpdateState(workspace, slug, undefined, beforeTokens);
     return {
       record,
       beforeTokens,
@@ -288,51 +249,22 @@ export async function sleepSwarm(options: {
 
   const spec = await workspace.readModule(slug);
   const areaSlugs = await workspace.listAreas(slug);
-  const prompt = [
-    `# Module: ${spec?.name ?? slug} (\`${slug}\`)`,
-    '',
-    `Token budget for the new memory file: ${budgetTokens}.`,
-    `The current file is roughly ${beforeTokens} tokens.`,
-    ...(areaSlugs.length
-      ? [
-          '',
-          "## This module's memory is split by area",
-          '',
-          ...areaSlugs.map((a) => `- ${a}`),
-          '',
-          'Anything true of only one of these belongs under `## Area: <slug>`,',
-          'which is filed into that area and does not count against the budget.',
-        ]
-      : []),
-    '',
-    '## Current memory',
-    '',
-    before.trim() || '_empty_',
-    ...(options.missionReport
-      ? ['', '## What just happened', '', options.missionReport.trim()]
-      : []),
-    '',
-    '---',
-    '',
-    'Write the new memory file.',
-  ].join('\n');
+  const prompt = buildCompressorPrompt(
+    spec,
+    slug,
+    budgetTokens,
+    beforeTokens,
+    areaSlugs,
+    before,
+    options.missionReport,
+  );
 
-  const outcome = await collectAgent(
+  const outcome = await runCompressorAgent(
     options.runtime,
-    {
-      id: `compressor:${slug}`,
-      role: 'compressor',
-      module: slug,
-      prompt,
-      // The compressor returns markdown, not a structured payload.
-      systemPromptOverride: standaloneSystemPrompt(COMPRESSOR_CHARTER, { structured: false }),
-      cwd: workspace.repoRoot,
-      tools: [],
-      ...(options.model ? { model: options.model } : {}),
-      permissionMode: 'dontAsk',
-      lean: true,
-      ephemeral: true,
-    },
+    slug,
+    prompt,
+    workspace.repoRoot,
+    options.model,
     options.onEvent,
     options.signal,
   );
@@ -340,32 +272,22 @@ export async function sleepSwarm(options: {
   let afterTokens = beforeTokens;
   let compressed = false;
   let note: string | undefined;
+  let moduleMemory: string | undefined;
 
   const rewritten = stripFence(outcome.result ?? '');
   if (outcome.ok && rewritten.length > 40) {
     const split = splitAreaSections(rewritten);
     // File area-specific facts before writing the module file, so a crash
     // between the two loses nothing that was not already on disk.
-    for (const [area, text] of Object.entries(split.areas)) {
-      // Never invent an area. A slug the compressor made up would create a
-      // memory file no context pack ever indexes, i.e. knowledge written to a
-      // place nothing reads.
-      if (!areaSlugs.includes(area)) continue;
-      const existing = await workspace.readAreaFile(slug, area);
-      await workspace.writeAreaFile(slug, area, 'memory.md', mergeAreaMemory(existing, text));
-    }
-    await workspace.writeModuleFile(slug, 'memory.md', ensureTrailingNewline(split.module));
+    await fileAreaSections(workspace, slug, split.areas, areaSlugs);
+    moduleMemory = ensureTrailingNewline(split.module);
     afterTokens = estimateTokens(split.module);
     compressed = true;
   } else {
     note = outcome.error ?? 'compressor returned nothing usable; memory left unchanged';
   }
 
-  const record = await workspace.updateSwarm(slug, {
-    state: 'sleeping',
-    memoryTokens: afterTokens,
-    lastActiveAt: new Date().toISOString(),
-  });
+  const record = await writeMemoryAndUpdateState(workspace, slug, moduleMemory, afterTokens);
 
   return { record, beforeTokens, afterTokens, compressed, ...(note ? { note } : {}) };
 }
