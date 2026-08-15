@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { analyzeModule } from './analyst.js';
+import { analyzeModule, MODULE_ANALYSIS_SCHEMA, moduleAnalysisSchema } from './analyst.js';
 import type { AgentRuntime, AgentSpec, ModuleSpec, SwarmEvent } from '../types.js';
 
 const SPEC: ModuleSpec = {
@@ -72,6 +72,34 @@ test('tells the analyst which areas already have their own memory', async () => 
   assert.match(prompt, /split into areas/);
   assert.match(prompt, /invoicing, refunds/);
   assert.match(prompt, /ONLY invariants,\ngotchas and interface facts that are true across every area/);
+});
+
+const ARRAY_LIMIT_FIELDS = ['entryPoints', 'landmarks', 'invariants', 'gotchas', 'publicInterface'] as const;
+
+function maxItems(schema: ReturnType<typeof moduleAnalysisSchema>, field: (typeof ARRAY_LIMIT_FIELDS)[number]): number {
+  const prop = schema.properties[field] as { maxItems: number };
+  return prop.maxItems;
+}
+
+test('the unsplit schema is unchanged from the frozen constant', () => {
+  const unsplit = moduleAnalysisSchema(false);
+  assert.deepEqual(unsplit, MODULE_ANALYSIS_SCHEMA);
+  assert.equal(maxItems(unsplit, 'entryPoints'), 8);
+  assert.equal(maxItems(unsplit, 'landmarks'), 12);
+  assert.equal(maxItems(unsplit, 'invariants'), 10);
+  assert.equal(maxItems(unsplit, 'gotchas'), 10);
+  assert.equal(maxItems(unsplit, 'publicInterface'), 12);
+});
+
+test('a split module gets a strictly tighter schema than an unsplit one', () => {
+  const unsplit = moduleAnalysisSchema(false);
+  const split = moduleAnalysisSchema(true);
+  for (const field of ARRAY_LIMIT_FIELDS) {
+    assert.ok(
+      maxItems(split, field) < maxItems(unsplit, field),
+      `${field} should be tighter when split: ${maxItems(split, field)} >= ${maxItems(unsplit, field)}`,
+    );
+  }
 });
 
 test('an empty area list is treated the same as no areas', async () => {

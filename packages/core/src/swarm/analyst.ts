@@ -18,93 +18,138 @@ import type { AgentRuntime, ModuleSpec, SwarmEvent } from '../types.js';
 import { collectAgent, type AgentOutcome } from '../runtime/collect.js';
 import { standaloneAgentPrompt } from '../runtime/system-tier.js';
 
-export const MODULE_ANALYSIS_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['purpose', 'entryPoints', 'landmarks', 'invariants', 'gotchas', 'publicInterface', 'dependsOn'],
-  properties: {
-    purpose: {
-      type: 'string',
-      description: 'What this module is responsible for, grounded in what you actually read.',
-    },
-    entryPoints: {
-      type: 'array',
-      maxItems: 8,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['path', 'why'],
-        properties: {
-          path: { type: 'string' },
-          why: { type: 'string', description: 'Why an agent should open this first.' },
-        },
-      },
-    },
-    landmarks: {
-      type: 'array',
-      maxItems: 12,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['path', 'role'],
-        properties: {
-          path: { type: 'string' },
-          role: { type: 'string', description: 'One line: what lives here.' },
-        },
-      },
-    },
-    invariants: {
-      type: 'array',
-      maxItems: 10,
-      items: { $ref: '#/$defs/claim' },
-      description: 'Rules that must hold. Things a future agent would break by accident.',
-    },
-    gotchas: {
-      type: 'array',
-      maxItems: 10,
-      items: { $ref: '#/$defs/claim' },
-      description: 'Surprises, traps, misleading names, load-bearing hacks.',
-    },
-    publicInterface: {
-      type: 'array',
-      maxItems: 12,
-      items: { type: 'string' },
-      description: 'What other modules import or call from this one.',
-    },
-    dependsOn: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Slugs of other modules this one genuinely depends on.',
-    },
-    correctedOwns: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'Only if the assigned globs were wrong. Otherwise omit.',
-    },
-  },
-  $defs: {
-    claim: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['text', 'path', 'source'],
-      properties: {
-        text: { type: 'string', description: 'The claim itself. Specific and checkable.' },
-        path: {
-          type: 'string',
-          description:
-            'Repo-relative file this claim is about. Must be a file you actually opened.',
-        },
-        source: {
-          type: 'string',
-          enum: ['code', 'doc'],
-          description:
-            'code = you read the implementation. doc = you read a docstring, README or comment ' +
-            'asserting it. Be honest: doc claims are checked against code before being trusted.',
-        },
-      },
-    },
-  },
+/**
+ * Array limits for the module-level analysis, keyed by whether the module
+ * has been split into areas.
+ *
+ * UNSPLIT is the original, measured budget: ~40 bullets across these five
+ * arrays came out to 2263 tokens against sleepSwarm's default 2000-token
+ * budget on a real repository (see manager.ts) — already over, before
+ * accounting for purpose/dependsOn text.
+ *
+ * SPLIT is exactly half of UNSPLIT (rounded down where odd). Once a module
+ * has areas, most of its detail already lives in per-area memory files that
+ * only the agent working that area loads (see areas.ts) — the module-level
+ * file is the one loaded by EVERY agent regardless of area, so it must hold
+ * only what is true across every area, which is inherently a smaller set of
+ * facts than "everything about the module". Halving is not a token
+ * computation; it is a deliberate, easy-to-explain cut proportional to how
+ * much of the module's detail moved out of this file and into area files.
+ */
+const UNSPLIT_LIMITS = {
+  entryPoints: 8,
+  landmarks: 12,
+  invariants: 10,
+  gotchas: 10,
+  publicInterface: 12,
 } as const;
+
+const SPLIT_LIMITS = {
+  entryPoints: 4,
+  landmarks: 6,
+  invariants: 5,
+  gotchas: 5,
+  publicInterface: 6,
+} as const;
+
+/**
+ * Build the module-analysis JSON schema, tightened when the module has
+ * already been split into areas. Built per call (not a frozen constant) so
+ * the limits can depend on `hasAreas`.
+ */
+export function moduleAnalysisSchema(hasAreas: boolean) {
+  const limits = hasAreas ? SPLIT_LIMITS : UNSPLIT_LIMITS;
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['purpose', 'entryPoints', 'landmarks', 'invariants', 'gotchas', 'publicInterface', 'dependsOn'],
+    properties: {
+      purpose: {
+        type: 'string',
+        description: 'What this module is responsible for, grounded in what you actually read.',
+      },
+      entryPoints: {
+        type: 'array',
+        maxItems: limits.entryPoints,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['path', 'why'],
+          properties: {
+            path: { type: 'string' },
+            why: { type: 'string', description: 'Why an agent should open this first.' },
+          },
+        },
+      },
+      landmarks: {
+        type: 'array',
+        maxItems: limits.landmarks,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['path', 'role'],
+          properties: {
+            path: { type: 'string' },
+            role: { type: 'string', description: 'One line: what lives here.' },
+          },
+        },
+      },
+      invariants: {
+        type: 'array',
+        maxItems: limits.invariants,
+        items: { $ref: '#/$defs/claim' },
+        description: 'Rules that must hold. Things a future agent would break by accident.',
+      },
+      gotchas: {
+        type: 'array',
+        maxItems: limits.gotchas,
+        items: { $ref: '#/$defs/claim' },
+        description: 'Surprises, traps, misleading names, load-bearing hacks.',
+      },
+      publicInterface: {
+        type: 'array',
+        maxItems: limits.publicInterface,
+        items: { type: 'string' },
+        description: 'What other modules import or call from this one.',
+      },
+      dependsOn: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Slugs of other modules this one genuinely depends on.',
+      },
+      correctedOwns: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Only if the assigned globs were wrong. Otherwise omit.',
+      },
+    },
+    $defs: {
+      claim: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['text', 'path', 'source'],
+        properties: {
+          text: { type: 'string', description: 'The claim itself. Specific and checkable.' },
+          path: {
+            type: 'string',
+            description:
+              'Repo-relative file this claim is about. Must be a file you actually opened.',
+          },
+          source: {
+            type: 'string',
+            enum: ['code', 'doc'],
+            description:
+              'code = you read the implementation. doc = you read a docstring, README or comment ' +
+              'asserting it. Be honest: doc claims are checked against code before being trusted.',
+          },
+        },
+      },
+    },
+  } as const;
+}
+
+/** The unsplit-module schema, for callers that don't vary it by area. */
+export const MODULE_ANALYSIS_SCHEMA = moduleAnalysisSchema(false);
 
 /**
  * One checkable assertion about a module.
@@ -266,7 +311,7 @@ export async function analyzeModule(
       tools: ['Read', 'Grep', 'Glob'],
       ...(options.model ? { model: options.model } : {}),
       permissionMode: 'dontAsk',
-      jsonSchema: MODULE_ANALYSIS_SCHEMA,
+      jsonSchema: moduleAnalysisSchema(hasAreas),
       lean: true,
       ephemeral: true,
     },
