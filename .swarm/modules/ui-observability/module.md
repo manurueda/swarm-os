@@ -1,6 +1,6 @@
 # UI & Status Rendering
 
-Assembles a serializable snapshot of everything in a `.swarm/` workspace (modules, signals, missions, refactor proposals, memory claims, import graph) via buildSnapshot(), and renders it as a single self-contained dark-themed HTML/CSS/JS page via renderUi(). Used both for the static `swarm ui` output and, wrapped by the CLI's local HTTP server (packages/cli/src/server.ts), for a live-updating view of a running mission. Deliberately opinionated: the primary object on the page is a 'task' (something wrong, where, and the command that fixes it), not a dashboard of stats.
+Two-file module that (1) assembles a fully-serializable UiSnapshot of a Swarm OS `.swarm/` workspace — modules, structural signals, import graph, missions, refactor proposals, memory-claim excerpts, config, token budgets — by re-running/reading the mapper, architecture-analysis and swarm sub-packages (snapshot.ts), and (2) renders that snapshot into one self-contained dark-themed HTML/CSS/JS string with no server, build step or external assets, embedding the JSON snapshot inline (render.ts). The rendered page's client-side JS optionally goes 'live' (SSE + fetch) when a `window.__SWARM__` token is injected by the CLI's server.ts wrapper, but render.ts itself has no knowledge of networking beyond that hook.
 
 ## Owns
 
@@ -8,19 +8,20 @@ Assembles a serializable snapshot of everything in a `.swarm/` workspace (module
 
 ## Read first
 
-- `packages/core/src/ui/snapshot.ts` — buildSnapshot() — pulls together digest, code stats, import graph, signals, memory.md claims, missions and refactor proposals into the UiSnapshot the renderer consumes.
-- `packages/core/src/ui/render.ts` — renderUi() — produces the entire HTML/CSS/inline-JS page as one template string; also documents the design rationale (task-first, not stats-first) in its header comment.
+- `packages/core/src/ui/snapshot.ts` — buildSnapshot(workspace, config) — the only way to produce a UiSnapshot; shows exactly which sibling modules (mapper, architecture, swarm, runtime) are re-invoked and how their outputs are merged and shaped for the UI
+- `packages/core/src/ui/render.ts` — renderUi(snapshot) — the entire HTML/CSS/client-JS page as template literals; also documents the module's design philosophy in its header comment (tasks over dashboards)
 
 ## Depends on
 
-- `workspace-git`
+- `mapper`
 - `architecture-analysis`
 - `swarm-orchestration`
+- `workspace-git`
 - `runtime`
 
 ## System context
 
-Swarm OS is a CLI + core library that decomposes a target repository into ownable modules and dispatches teams of Claude Code agents ('swarms') to work those modules concurrently in isolated git worktrees, coordinating missions, ownership, and scheduling. It is built for developers who want unattended, context-economical multi-agent refactors and feature work on their own codebases.
+_Not recorded._
 
 ---
 

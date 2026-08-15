@@ -2,23 +2,25 @@
 # diffs are checked against them after every mission.
 
 name: UI & Status Rendering
-purpose: "Assembles a serializable snapshot of everything in a `.swarm/`
-  workspace (modules, signals, missions, refactor proposals, memory claims,
-  import graph) via buildSnapshot(), and renders it as a single self-contained
-  dark-themed HTML/CSS/JS page via renderUi(). Used both for the static `swarm
-  ui` output and, wrapped by the CLI's local HTTP server
-  (packages/cli/src/server.ts), for a live-updating view of a running mission.
-  Deliberately opinionated: the primary object on the page is a 'task'
-  (something wrong, where, and the command that fixes it), not a dashboard of
-  stats."
+purpose: Two-file module that (1) assembles a fully-serializable UiSnapshot of a
+  Swarm OS `.swarm/` workspace — modules, structural signals, import graph,
+  missions, refactor proposals, memory-claim excerpts, config, token budgets —
+  by re-running/reading the mapper, architecture-analysis and swarm sub-packages
+  (snapshot.ts), and (2) renders that snapshot into one self-contained
+  dark-themed HTML/CSS/JS string with no server, build step or external assets,
+  embedding the JSON snapshot inline (render.ts). The rendered page's
+  client-side JS optionally goes 'live' (SSE + fetch) when a `window.__SWARM__`
+  token is injected by the CLI's server.ts wrapper, but render.ts itself has no
+  knowledge of networking beyond that hook.
 owns:
   - packages/core/src/ui/**
 entryPoints:
   - packages/core/src/ui/snapshot.ts
   - packages/core/src/ui/render.ts
 dependsOn:
-  - workspace-git
+  - mapper
   - architecture-analysis
   - swarm-orchestration
+  - workspace-git
   - runtime
 fileCount: 2

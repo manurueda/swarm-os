@@ -2,15 +2,17 @@
 # diffs are checked against them after every mission.
 
 name: Agent Runtime Port
-purpose: "Defines the AgentRuntime port (types.ts) and its sole implementation,
-  a subprocess wrapper around the local `claude` CLI that speaks its
-  `--output-format stream-json` NDJSON protocol and translates it into a
-  normalized SwarmEvent stream. Also owns: environment scrubbing so spawned
-  agents never see billing/nesting env vars, construction of tool-less \"system
-  tier\" prompts, empirically-measured per-agent context baseline estimates, and
-  self-update detection/checking/applying for the Swarm OS binary itself
-  (git-checkout or npm install). index.ts is the package's single flat barrel
-  export surface for all of @swarm-os/core, not just this module."
+purpose: "Defines the AgentRuntime port (types.ts:
+  ModuleSpec/SwarmRecord/MissionRecord/AgentSpec/SwarmEvent/AgentRuntime
+  interface) and its sole implementation, ClaudeCodeLocalRuntime — a subprocess
+  wrapper around the local `claude` CLI's `--output-format stream-json` NDJSON
+  protocol, translated into a normalized SwarmEvent stream. Also owns:
+  environment scrubbing (billing/nesting env vars stripped from spawned agents),
+  tool-less \"system tier\" prompt construction with measured token savings,
+  empirically-anchored per-agent context baseline estimates, and self-update
+  detection/check/apply for the Swarm OS binary itself (git fast-forward or npm
+  install -g). index.ts is the single flat barrel export for the entire
+  @swarm-os/core package, not scoped to this module alone."
 owns:
   - packages/core/src/runtime/**
   - packages/core/src/update/**
@@ -38,4 +40,4 @@ dependsOn:
   - workspace-git — Workspace persists SwarmRecord/MissionRecord/ModuleSpec
     types defined here; update/index.ts's stateDir() (~/.swarm) is distinct from
     the per-project workspace .swarm/ dir owned by workspace-git
-fileCount: 10
+fileCount: 13

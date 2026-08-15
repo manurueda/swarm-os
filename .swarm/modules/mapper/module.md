@@ -1,6 +1,6 @@
 # Repo Mapper
 
-Builds a deterministic, tokens-free structural digest of a target repo and drives the four-stage `swarm map` pipeline (digest → partition → analyse → synthesise) that turns it into a durable module map with per-module charters and memory files under the workspace's `.swarm/` directory. Also detects when a previously-generated map has drifted from the repo's current state.
+Builds a deterministic, model-free structural digest of a target repo (digest.ts) and drives the four-stage `swarm map` pipeline — digest → partition → analyse → synthesise (pipeline.ts, pipeline/*.ts) — that turns that digest into a durable module map: `.swarm/system.md`, per-module `module.md` charters and `memory.md`, written via the Workspace store. Also detects when a previously-generated map has drifted from the repo's current state (detectDrift) and flags modules whose structural sub-domains ('areas') were never surveyed into per-area memory (pendingSplits).
 
 ## Owns
 
@@ -8,9 +8,10 @@ Builds a deterministic, tokens-free structural digest of a target repo and drive
 
 ## Read first
 
-- `packages/core/src/mapper/pipeline.ts` — mapProject() is the orchestrator: runs digest→partition→analyse→synthesise, decides incremental re-analysis via per-module file hashing, and writes all workspace state. Also has detectDrift().
-- `packages/core/src/mapper/digest.ts` — buildDigest() computes the RepoDigest (file list, tree, languages, doc headings, manifests, content fingerprints, overall hash) — the only view of the repo ever sent to a model.
-- `packages/core/src/mapper/map.ts` — mapRepository() is the single tool-less agent call that turns a RepoDigest into a ModuleSpec[] + system summary; also renders module.md / system.md markdown.
+- `packages/core/src/mapper/pipeline.ts` — mapProject() is the orchestrator — reads it top-to-bottom to see the whole digest→partition→analyse(+areas)→synthesise flow and how each pipeline/*.ts step plugs in. Also hosts detectDrift() and pendingSplits().
+- `packages/core/src/mapper/digest.ts` — buildDigest()/renderDigest() — the only thing ever sent to a model; defines RepoDigest (files, fingerprints, hash, tree, docs, manifests) that every other file in this module consumes.
+- `packages/core/src/mapper/map.ts` — mapRepository() — the single tool-less agent call that proposes module boundaries from the digest; also owns renderModuleCharter/renderSystemMap and the MODULE_MAP_SCHEMA the agent's structured output must satisfy.
+- `packages/core/src/mapper/pipeline/types.ts` — Shared shapes (MapProjectOptions, MapResult, MapModuleResult, MapProgress) that every pipeline/*.ts step and consumer imports; read this before any individual step file.
 
 ## Depends on
 
@@ -20,7 +21,7 @@ Builds a deterministic, tokens-free structural digest of a target repo and drive
 
 ## System context
 
-Swarm OS is a CLI + core library that decomposes a target repository into ownable modules and dispatches teams of Claude Code agents ('swarms') to work those modules concurrently in isolated git worktrees, coordinating missions, ownership, and scheduling. It is built for developers who want unattended, context-economical multi-agent refactors and feature work on their own codebases.
+_Not recorded._
 
 ---
 

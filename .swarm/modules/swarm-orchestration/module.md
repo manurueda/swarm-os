@@ -1,6 +1,6 @@
 # Swarm Orchestration
 
-Manages the agent swarm lifecycle and the multi-module missions built on it: enforces per-module file ownership (glob matching + post-hoc diff checking), splits large modules into 'areas' for finer-grained memory, runs the per-module 'analyst' agent that produces a module's charter and memory, verifies memory claims deterministically and adversarially, schedules concurrent agent processes under a subscription rate-limit budget, and drives `swarm loop` — an unattended, hours-long cycle of survey → pick task → run mission → verify → merge onto a single integration branch.
+Owns the swarm agent lifecycle (wake with a scoped context pack, sleep with memory compression), per-module ownership enforcement, the "areas" sub-splitting mechanism for large modules' memory, the analyst agent that produces a module's charter+memory, the adversarial memory verifier, a rate-limit-aware concurrency scheduler for spawning agent processes, and `runLoop` — the unattended survey→pick→mission→verify→merge cycle that drives `swarm loop` on a single integration branch.
 
 ## Owns
 
@@ -9,25 +9,24 @@ Manages the agent swarm lifecycle and the multi-module missions built on it: enf
 
 ## Read first
 
-- `packages/core/src/swarm/manager.ts` — Swarm wake/sleep lifecycle and buildContextPack — the function that assembles everything an agent sees when it wakes into a module (system summary, charter, memory, area index, dependency contracts, file index).
-- `packages/core/src/swarm/analyst.ts` — Defines the Claim type, MODULE_ANALYSIS_SCHEMA, analyzeModule (runs the read-only analyst agent), and the render/parse functions (renderClaim/parseClaimLine) that are the serialization contract for memory.md claims — shared with verify.ts.
-- `packages/core/src/swarm/verify.ts` — Two-stage claim verification: deterministic citation resolution (extractClaims/checkCitation) plus an adversarial re-read agent (verifyModule). This is what `swarm verify` runs.
-- `packages/core/src/swarm/ownership.ts` — Glob-to-regex translation and the ownership/conflict-detection logic that is the only real enforcement of module boundaries.
-- `packages/core/src/swarm/areas.ts` — detectAreas splits an oversized module's files into sub-domain 'areas' by directory depth, each with its own memory budget.
-- `packages/core/src/swarm/scheduler.ts` — Bounded-concurrency runner (Scheduler.run) used to launch agents in parallel, with rate-limit pause behavior.
-- `packages/core/src/loop/run.ts` — runLoop — the `swarm loop` command's implementation: survey → pick task from structural signals → run mission → verify → merge, with multiple stop conditions.
+- `packages/core/src/swarm/manager.ts` — Central lifecycle file: buildContextPack (what an agent sees on wake), wakeSwarm, sleepSwarm (memory compression pipeline), sleepAll. Wires together memory-state, compression-budget, compressor-prompt, compressor-agent, area-memory, file-area-sections, finalize-sleep.
+- `packages/core/src/swarm/analyst.ts` — Defines the analyst agent (the same kind of agent producing this report), its JSON schema/prompt, and the canonical render functions (renderMemory/renderCharter/renderClaim/parseClaimLine) for module.md and memory.md; verify.ts depends on parseClaimLine.
+- `packages/core/src/swarm/verify.ts` — Two-stage `swarm verify`: deterministic citation resolution (checkCitation) then an independent adversarial re-read agent (verifyModule) that sees only claims, stripped of provenance.
+- `packages/core/src/swarm/areas.ts` — detectAreas (directory-structure-driven sub-domain splitting), planAreas, areaAsModule, renderAreaIndex — keeps large modules' memory addressable instead of one saturated file.
+- `packages/core/src/swarm/ownership.ts` — Glob primitives (matchesGlob/isOwned) and checkOwnership/findOwnershipConflicts — enforces and audits per-module file boundaries; consumed directly by mission/run.ts outside this module.
+- `packages/core/src/swarm/scheduler.ts` — Bounded-concurrency runner that pauses new launches on rate-limit events; used wherever many agent processes are spawned at once (missions, map, verify).
+- `packages/core/src/loop/run.ts` — runLoop: the whole unattended survey→pick→mission→verify→merge cycle; tasksFromSignals maps architecture signals to mission goals.
 
 ## Depends on
 
-- `runtime`
-- `workspace-git`
 - `mission`
+- `workspace-git`
+- `runtime`
 - `architecture-analysis`
-- `mapper`
 
 ## System context
 
-Swarm OS is a CLI + core library that decomposes a target repository into ownable modules and dispatches teams of Claude Code agents ('swarms') to work those modules concurrently in isolated git worktrees, coordinating missions, ownership, and scheduling. It is built for developers who want unattended, context-economical multi-agent refactors and feature work on their own codebases.
+_Not recorded._
 
 ---
 

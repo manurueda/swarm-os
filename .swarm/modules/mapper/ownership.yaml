@@ -2,19 +2,23 @@
 # diffs are checked against them after every mission.
 
 name: Repo Mapper
-purpose: Builds a deterministic, tokens-free structural digest of a target repo
-  and drives the four-stage `swarm map` pipeline (digest → partition → analyse →
-  synthesise) that turns it into a durable module map with per-module charters
-  and memory files under the workspace's `.swarm/` directory. Also detects when
-  a previously-generated map has drifted from the repo's current state.
+purpose: "Builds a deterministic, model-free structural digest of a target repo
+  (digest.ts) and drives the four-stage `swarm map` pipeline — digest →
+  partition → analyse → synthesise (pipeline.ts, pipeline/*.ts) — that turns
+  that digest into a durable module map: `.swarm/system.md`, per-module
+  `module.md` charters and `memory.md`, written via the Workspace store. Also
+  detects when a previously-generated map has drifted from the repo's current
+  state (detectDrift) and flags modules whose structural sub-domains ('areas')
+  were never surveyed into per-area memory (pendingSplits)."
 owns:
   - packages/core/src/mapper/**
 entryPoints:
   - packages/core/src/mapper/pipeline.ts
   - packages/core/src/mapper/digest.ts
   - packages/core/src/mapper/map.ts
+  - packages/core/src/mapper/pipeline/types.ts
 dependsOn:
   - swarm-orchestration
   - workspace-git
   - runtime
-fileCount: 3
+fileCount: 40

@@ -1,6 +1,6 @@
 # Mission Orchestration
 
-Defines and executes a Swarm OS 'mission': routing a single natural-language goal to the module(s) it touches (route.ts), spawning one isolated worker agent per assigned module in its own git worktree with only that module's charter/memory (run.ts), and having an independent reviewer agent critique each resulting diff before it is committed (review.ts). run.ts is the orchestrator that ties routing, worktree creation, agent execution, review, commit, memory-compression ('sleep'), and worktree cleanup into one end-to-end mission lifecycle.
+Executes a single Swarm OS 'mission': turn one natural-language goal into module assignments (route.ts), spawn one isolated worker agent per assigned module in its own git worktree with only that module's context (run.ts), have an independent read-only reviewer agent critique the resulting diff before commit (review.ts), then commit, compress the module's memory ('sleep'), and clean up worktrees. run.ts is the single orchestrator tying all of this together end-to-end.
 
 ## Owns
 
@@ -8,20 +8,21 @@ Defines and executes a Swarm OS 'mission': routing a single natural-language goa
 
 ## Read first
 
-- `packages/core/src/mission/run.ts` — The orchestrator — runMission() is the single public entry point that drives route -> spawn -> work -> review -> commit -> harvest/sleep -> cleanup. Also defines missionId(), WorkReport, MissionModuleResult, MissionResult.
-- `packages/core/src/mission/route.ts` — routeMission() — cheap LLM call that maps a goal to per-module task assignments using only a one-line summary per module (not full repo context).
-- `packages/core/src/mission/review.ts` — reviewModuleChange() — read-only reviewer agent that checks a worker's diff for invented cross-module contracts, dead code, unmet task, false verification claims.
+- `packages/core/src/mission/run.ts` — The orchestrator: runMission() drives route -> spawn worktree -> build context pack -> run worker agent -> compute diff/ownership -> review -> commit -> sleep/compress memory -> remove worktree -> write mission report. Also defines missionId(), WorkReport, MissionResult types and the worker's system prompt (workerCharter).
+- `packages/core/src/mission/route.ts` — routeMission(): a cheap, tool-less agent that maps a goal to a minimal set of module assignments using only a system summary + one line per module (not the whole repo). Defines MissionPlan parsing/validation and renderPlan() for plan.md.
+- `packages/core/src/mission/review.ts` — reviewModuleChange(): a read-only agent (Read/Grep/Glob only) that reviews one module's diff against its task, checks cross-module contract usage, verification claims, and whether new code is wired in. Verdict is advisory only — never blocks the commit.
+- `packages/core/src/mission/mission-id.test.ts` — Regression test documenting exactly why missionId() must hash the full goal, not just derive a slug — read this before touching missionId().
 
 ## Depends on
 
-- `runtime`
 - `swarm-orchestration`
 - `workspace-git`
+- `runtime`
 - `mapper`
 
 ## System context
 
-Swarm OS is a CLI + core library that decomposes a target repository into ownable modules and dispatches teams of Claude Code agents ('swarms') to work those modules concurrently in isolated git worktrees, coordinating missions, ownership, and scheduling. It is built for developers who want unattended, context-economical multi-agent refactors and feature work on their own codebases.
+_Not recorded._
 
 ---
 

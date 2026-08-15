@@ -2,15 +2,17 @@
 # diffs are checked against them after every mission.
 
 name: CLI & Product Surface
-purpose: The user-facing CLI package (`@swarm-os/cli`, bin name `swarm`) plus
-  the repo's root docs/manifests. It parses argv, resolves a
+purpose: "The user-facing CLI (`@swarm-os/cli`, bin `swarm`) plus the repo's
+  root docs/manifests. It parses argv, resolves a
   Workspace/AgentRuntime/SwarmConfig context, and dispatches to one handler per
   subcommand (map, status, mission, missions, memory, verify, refactor, ui,
-  sleep, wake, loop, doctor, update). All domain logic — mapping, mission
-  routing, orchestration, workspace/git, runtime — is imported wholesale from
-  the single package `@swarm-os/core`; this module contributes only argv
-  parsing, terminal rendering (a live in-place status board), a local HTTP
-  server for the live `swarm ui --serve` view, and self-update scheduling.
+  sleep, wake, loop, update). It owns zero domain logic — mapping, mission
+  routing/orchestration, workspace/git, and the runtime port are all imported
+  wholesale from `@swarm-os/core` — and contributes only: argv parsing
+  (args.ts), context resolution (context.ts), terminal rendering including a
+  live in-place multi-row status board (ui.ts), a localhost-only HTTP server for
+  `swarm ui --serve` (server.ts), and self-update scheduling around every
+  command invocation (commands/update.ts)."
 owns:
   - packages/cli/**
   - README.md
@@ -26,13 +28,12 @@ entryPoints:
   - packages/cli/src/args.ts
   - packages/cli/src/ui.ts
   - packages/cli/src/server.ts
-  - docs/ARCHITECTURE.md
 dependsOn:
   - runtime
   - workspace-git
-  - mapper
   - mission
+  - mapper
   - swarm-orchestration
   - ui-observability
   - architecture-analysis
-fileCount: 25
+fileCount: 26

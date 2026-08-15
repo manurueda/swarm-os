@@ -4,47 +4,48 @@ _Durable knowledge for the `cli` swarm. Read on wake, rewritten on sleep._
 
 ## Invariants
 
-- Commands that spawn agents must call `assertRuntimeReady(runtime)` before doing so; it throws UserError if `runtime.preflight()` fails (e.g. an API key is set, defeating the subscription-billing guarantee). Read-only commands (status, memory) skip it. <sub>`packages/cli/src/context.ts`</sub>
-- Only `config.runtime === 'claude-code-local'` is implemented; buildRuntime throws UserError for anything else, telling the user to edit .swarm/config.yaml. <sub>`packages/cli/src/context.ts`</sub>
-- resolveWorkspace prefers an explicit --repo/explicitPath, then the nearest mapped ancestor directory (Workspace.find), then falls back to a fresh (unmapped) Workspace at cwd — never errors just from missing a map unless requireMapped is set. <sub>`packages/cli/src/context.ts`</sub>
-- The background self-update spawn only happens after main()'s promise resolves, and never when SWARM_UPDATE_WORKER=1 (i.e. the background worker itself doesn't re-spawn another background worker), and never before a mission/command's real work is done — deliberately ordered so an update can't race a live agent or the network a mission is using. <sub>`packages/cli/src/main.ts`</sub>
-- `swarm loop` refuses to start (unless --dry-run) if the working tree has uncommitted changes, because it merges onto one branch over hours as it goes. <sub>`packages/cli/src/commands/loop.ts`</sub>
-- The local HTTP server (swarm ui --serve) binds only to 127.0.0.1 (not configurable), requires an `x-swarm-token` header matching a randomBytes(16) token generated at startup for the mutating POST /api/mission endpoint, and refuses a second mission while one is already running. <sub>`packages/cli/src/server.ts`</sub>
-- `.swarm/` itself is deliberately NOT in the root .gitignore — Swarm OS writes its own `.swarm/.gitignore` to ignore only per-run/per-machine state, so the module map/memory/config remain committable. <sub>`.gitignore`</sub>
+- The `VERSION` constant in main.ts ('0.1.0') is a hardcoded literal, not read from package.json — `swarm --version` and packages/cli/package.json's version field must be bumped together or they will silently diverge. <sub>`packages/cli/src/main.ts`</sub>
+- scheduleBackgroundUpdate() is only ever invoked in main()'s `.then()` after main() resolves — never before or during — so a self-update can't compete with a running mission for the network or swap files under a live agent process. <sub>`packages/cli/src/main.ts`</sub>
+- The background updater is itself just `spawn(process.execPath, [SELF_URL, 'update', '--background'], {detached:true, stdio:'ignore', env:{...,SWARM_UPDATE_WORKER:'1'}})`; main.ts checks `process.env.SWARM_UPDATE_WORKER` to avoid recursively scheduling another background updater from within the background updater. <sub>`packages/cli/src/commands/update.ts`</sub>
+- assertRuntimeReady()/runtime.preflight() is the sole enforcement point for the 'never bill via API key, subscription only' guarantee; every command that spawns agents calls it before doing so (mission, map, loop, sleep --compress, verify without --citations-only, refactor without --signals-only) — commands that only read (status, memory, missions) skip it. <sub>`packages/cli/src/context.ts`</sub>
+- The live HTTP server (`swarm ui --serve`) binds only to 127.0.0.1, is not configurable to anything else, and every mutating endpoint (`/api/mission`) requires a random per-process token sent via the `x-swarm-token` header — relying on the browser CORS preflight rule (custom headers require a preflight, and this server answers no CORS preflight) to prevent a malicious page from POSTing on your behalf. <sub>`packages/cli/src/server.ts`</sub>
+- The live server enforces one mission at a time: `/api/mission` returns 409 if `live.running` is already true, because missions consume a shared agent-spawn rate-limit budget that a double-click shouldn't spend twice. <sub>`packages/cli/src/server.ts`</sub>
+- SIGINT handling is two-stage: first Ctrl-C sends SIGTERM to spawned agents via killAllAgents and leaves a 1.5s grace window before force-exiting with SIGKILL; a second Ctrl-C during that window immediately SIGKILLs and exits with code 130. <sub>`packages/cli/src/main.ts`</sub>
+- `swarm loop` refuses to start (unless --dry-run) if the working tree has uncommitted changes, because the loop merges accumulated work onto one branch over hours and needs a clean starting point. <sub>`packages/cli/src/commands/loop.ts`</sub>
+- LiveBoard degrades to plain appended lines (no ANSI repaint) whenever stdout is not a TTY, so piping CLI output to a file/CI log never contains cursor-control escape sequences. <sub>`packages/cli/src/ui.ts`</sub>
 
 ## Gotchas
 
-- parseArgs treats the first argv token as the command ONLY if it does not start with '-'; `swarm --version` and `swarm --help` therefore have command === '' and are matched as flags in main.ts, not as commands. <sub>`packages/cli/src/args.ts`</sub>
-- A long flag consumes the following token as its value only if that token does NOT start with '-'; otherwise the flag is boolean true. So a value that happens to start with '-' (e.g. a negative number) cannot be passed as a bare flag value, only via --flag=-5. <sub>`packages/cli/src/args.ts`</sub>
-- flagList splits on comma OR whitespace, so `--modules "cli,core mapper"` becomes three modules ['cli','core','mapper'] — a space inside a quoted arg is treated as a separator too, not just commas. <sub>`packages/cli/src/args.test.ts`</sub>
-- `swarm loop --plan` (loopPlanCommand) and the `currentBranchName` helper in loop.ts use dynamic `await import('@swarm-os/core')` for buildDigest/countLines/etc rather than the static import at top of file — an easy place to miss an export when core's barrel changes. <sub>`packages/cli/src/commands/loop.ts`</sub>
-- LiveBoard renders differently depending on TTY: in non-interactive mode (piped/CI), `set()` immediately appends a plain line on change instead of repainting in place; command code doesn't need to branch on this itself. <sub>`packages/cli/src/ui.ts`</sub>
-- `swarm wake <module>` only flips the on-disk state to active — it spawns no agent and does no work; the command's own output explicitly warns the user of this to avoid the intuitive-but-wrong assumption that wake starts a mission. <sub>`packages/cli/src/commands/swarms.ts`</sub>
-- `swarm sleep` without --compress uses `budgetTokens: Number.MAX_SAFE_INTEGER`, i.e. it will not invoke a compression model call unless explicitly asked (compression costs a model call and is normally driven automatically by missions). <sub>`packages/cli/src/commands/swarms.ts`</sub>
-- packages/cli/dist/ (compiled .d.ts etc) exists alongside src/ in the tree — build output, not source of truth; always read src/. <sub>`packages/cli/dist`</sub>
-- main.ts's SIGINT handler kills agents with SIGTERM on first Ctrl-C then SIGKILL 1.5s later automatically, and immediately SIGKILL + exit(130) on a second Ctrl-C before that timer fires — a future agent adding cleanup-on-exit logic must account for the forced-kill window, not assume graceful shutdown always runs. <sub>`packages/cli/src/main.ts`</sub>
+- `swarm wake <module>` only flips the swarm's state marker to active — it spawns nothing; the command itself prints a warning to this effect. Missions wake/sleep swarms automatically, so this and `swarm sleep` are rarely-needed manual overrides. <sub>`packages/cli/src/commands/swarms.ts`</sub>
+- `swarm sleep` only reaches for the runtime (and thus only requires assertRuntimeReady) when `--compress` is passed; otherwise it passes `budgetTokens: Number.MAX_SAFE_INTEGER` so sleepSwarm's compressor never actually triggers a model call. <sub>`packages/cli/src/commands/swarms.ts`</sub>
+- `loop.ts`'s `currentBranchName` helper does a dynamic `await import('@swarm-os/core')` just to grab `currentBranch`, duplicating the static import pattern used everywhere else in the same file for no apparent reason other than to avoid widening the top-level import list — same pattern appears in `loopPlanCommand` and in doctor.ts's `measure()` for `collectAgent`. <sub>`packages/cli/src/commands/loop.ts`</sub>
+- In args.ts, a long flag consumes the *next* token as its value only if that token does not start with `-`; otherwise the flag is boolean `true`. This means `--model --dry-run` sets model=true (boolean), not an error — a missing value silently becomes a boolean flag rather than failing parsing. <sub>`packages/cli/src/args.ts`</sub>
+- main.ts calls `noticeIfUpdated()` before dispatch for every command except `update` itself — so a `swarm update` invocation never prints the 'updated in background' banner even if one is pending, by design (checked via `args.command !== 'update'`). <sub>`packages/cli/src/main.ts`</sub>
+- `packages/cli/dist/**` is checked into the glob results (compiled output alongside src) — the module ships prebuilt dist/*.js/.d.ts/.map files; be sure changes to src are followed by a build rather than assuming dist is gitignored/regenerated transparently. <sub>`packages/cli/package.json`</sub>
+- resolveWorkspace() falls back silently to `new Workspace(process.cwd())` when no `.swarm/` is found anywhere up the tree and no --repo flag was given; most commands then immediately throw a clearer UserError via `loadContext({requireMapped:true})`, but any caller that omits requireMapped gets a Workspace pointing at an unmapped cwd with no error. <sub>`packages/cli/src/context.ts`</sub>
 
 ## Landmarks
 
-- `packages/cli/src/main.ts` — bin entry, help text, command dispatch switch, SIGINT/exit handling
-- `packages/cli/src/context.ts` — shared context resolution (Workspace, AgentRuntime, SwarmConfig) + UserError + preflight gate
-- `packages/cli/src/args.ts` — minimal hand-rolled argv parser + flagString/flagBool/flagNumber/flagList helpers
-- `packages/cli/src/ui.ts` — terminal color/table/LiveBoard rendering, TTY-aware (degrades to plain appended lines when piped)
-- `packages/cli/src/server.ts` — local-only HTTP server backing `swarm ui --serve`: snapshot, SSE events, token-gated mission POST
-- `packages/cli/src/commands/map.ts` — `swarm map`: drift detection, incremental re-analysis, calls core's mapProject with progress callback
-- `packages/cli/src/commands/mission.ts` — `swarm mission`/`swarm missions`: calls core's runMission, renders per-module agent rows, review findings, ownership violations
-- `packages/cli/src/commands/loop.ts` — `swarm loop`/`swarm loop --plan`: unattended survey→pick→mission→verify→merge cycle via core's runLoop; requires a clean working tree unless --dry-run
-- `packages/cli/src/commands/verify.ts` — `swarm verify`: deterministic citation check + optional adversarial verifier agent per module, uses core's Scheduler directly
-- `packages/cli/src/commands/refactor.ts` — `swarm refactor`: deterministic signals (computeSignals) + per-module reviewer agent, writes .swarm/REFACTOR.md and refactor.json
-- `packages/cli/src/commands/doctor.ts` — `swarm doctor`: billing-env detection (the API-key-vs-subscription safety check), preflight report, optional lean-spawn token measurement
+- `packages/cli/src/main.ts` — argv→command dispatch, HELP text, SIGINT handling, background-update trigger
+- `packages/cli/src/context.ts` — loadContext/resolveWorkspace/buildRuntime/assertRuntimeReady — shared setup for every command
+- `packages/cli/src/args.ts` — minimal argv parser + typed flag readers (flagBool/flagString/flagNumber/flagList)
+- `packages/cli/src/ui.ts` — terminal color/table/LiveBoard rendering primitives shared by all commands
+- `packages/cli/src/server.ts` — localhost HTTP+SSE server backing `swarm ui --serve`, including the mission-start endpoint
+- `packages/cli/src/commands/mission.ts` — `swarm mission`/`swarm missions` — richest command, drives runMission with a live per-module status board
+- `packages/cli/src/commands/map.ts` — `swarm map` — drift/incremental-remap logic, calls ensureSwarmIgnore + mapProject
+- `packages/cli/src/commands/loop.ts` — `swarm loop`/`swarm loop --plan` — unattended multi-mission runner, writes .swarm/loop.log and loop.json
+- `packages/cli/src/commands/doctor.ts` — `swarm doctor` — runtime preflight + billing-env detection + optional lean-spawn measurement
+- `packages/cli/src/commands/update.ts` — `swarm update` plus the detached background-update worker entry (`--background` flag) and noticeIfUpdated banner
+- `packages/cli/src/commands/verify.ts` — `swarm verify` — deterministic citation check + independent verifier agent per module
+- `docs/ARCHITECTURE.md` — System-level design doc: layering (CLI → core → AgentRuntime port → concrete runtimes) and the runtime port contract
 
 ## Public interface
 
-- bin `swarm` → packages/cli/dist/main.js (declared in packages/cli/package.json)
-- Subcommands: doctor, map, status, mission, missions, memory, verify, refactor, ui, loop (+--plan), update, sleep, wake, help, version — this is the whole product surface a human or script drives
-- npm scripts at repo root (package.json): build, test, clean, watch, `swarm` (runs dist/main.js directly), `link` (npm link -w @swarm-os/cli) — used by anyone building/testing/installing Swarm OS locally
-- tsconfig.base.json — shared strict TS compiler options (ES2023, NodeNext, strict, noUncheckedIndexedAccess) that packages/cli's own tsconfig presumably extends
-- README.md / docs/ARCHITECTURE.md / docs/CONTEXT-ECONOMY.md — the project's public-facing explanation of the module/swarm/mission/memory model and the AgentRuntime port, consumed by anyone (human or agent) onboarding to the whole system
+- bin `swarm` (packages/cli/dist/main.js) — the only externally consumed artifact; the whole package.json `files` field is just `["dist"]`
+- packages/cli/src/args.ts: parseArgs/flagBool/flagString/flagNumber/flagList — used across every commands/*.ts file within this module only, not exported outside the package
+- packages/cli/src/ui.ts: c/line/note/ok/fail/warn/heading/table/LiveBoard/formatTokens/formatDuration/clip/pad — shared terminal rendering used by every command handler, internal to the module
+- packages/cli/src/context.ts: loadContext/resolveWorkspace/buildRuntime/applyOverrides/assertRuntimeReady/UserError — shared command setup, internal to the module
+- packages/cli/src/server.ts: serve(options) — consumed only by commands/ui.ts's `--serve` path
 
 ---
 

@@ -1,6 +1,6 @@
 # Workspace & Git Worktrees
 
-Two tightly related pieces: (1) `workspace/` — a typed, all-async wrapper (`Workspace` class) around the project's `.swarm/` directory, which is the durable, on-disk store of everything Swarm OS knows about a repo (config, module map/ownership, per-module memory/decisions, swarm state, mission records/logs); (2) `git/` — a thin wrapper around the `git` CLI plus git-worktree lifecycle management, giving each agent an isolated checkout under `.swarm/worktrees/` so parallel swarms never collide on the index or working tree.
+Durable on-disk store (`workspace/`) for everything Swarm OS knows about a target repo under its `.swarm/` directory (config, module map/ownership, per-module memory/decisions/areas, swarm state, mission records/event logs), plus a git CLI wrapper and worktree lifecycle manager (`git/`) that gives each agent an isolated checkout under `.swarm/worktrees/` so parallel swarms never collide on the index or working tree, and provides the primitives (diff, commit, clean-tree check) that missions and the unattended loop are built on.
 
 ## Owns
 
@@ -9,17 +9,20 @@ Two tightly related pieces: (1) `workspace/` — a typed, all-async wrapper (`Wo
 
 ## Read first
 
-- `packages/core/src/workspace/store.ts` — Defines the `Workspace` class — the single read/write gateway to `.swarm/`. Almost every other core module (mapper, mission, loop, swarm orchestration, ui) goes through this.
-- `packages/core/src/workspace/config.ts` — Defines `SwarmConfig`, its defaults, and the parse/serialize pair used for `.swarm/config.yaml`, the one file that's committed to the target repo.
-- `packages/core/src/git/worktree.ts` — All git interaction goes through the `git()` helper here; also owns worktree create/remove/prune, dependency-linking, diffing and committing.
+- `packages/core/src/workspace/store.ts` — Defines the Workspace class — the sole typed async API onto .swarm/. Every read/write of config, modules, areas, state, missions goes through it.
+- `packages/core/src/workspace/config.ts` — Defines SwarmConfig, its defaults, and the parse/serialize round-trip used for .swarm/config.yaml — the project-level policy every other module reads.
+- `packages/core/src/git/worktree.ts` — All git operations (worktree create/remove, diff, commit, clean-tree checks) live in this single file; everything else in git/ is just tests of it.
 
 ## Depends on
 
-- `runtime`
+- `mission (run.ts drives Workspace + worktree.ts to orchestrate a mission end-to-end)`
+- `swarm-orchestration (manager.ts, finalize-sleep.ts, memory-state.ts, verify.ts consume Workspace heavily for module/state/memory)`
+- `mapper (pipeline/* uses Workspace extensively for module map read/write, areas, archiving)`
+- `ui-observability (snapshot.ts reads Workspace to build the dashboard snapshot)`
 
 ## System context
 
-Swarm OS is a CLI + core library that decomposes a target repository into ownable modules and dispatches teams of Claude Code agents ('swarms') to work those modules concurrently in isolated git worktrees, coordinating missions, ownership, and scheduling. It is built for developers who want unattended, context-economical multi-agent refactors and feature work on their own codebases.
+_Not recorded._
 
 ---
 

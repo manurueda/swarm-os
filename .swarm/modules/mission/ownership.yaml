@@ -2,23 +2,23 @@
 # diffs are checked against them after every mission.
 
 name: Mission Orchestration
-purpose: "Defines and executes a Swarm OS 'mission': routing a single
-  natural-language goal to the module(s) it touches (route.ts), spawning one
-  isolated worker agent per assigned module in its own git worktree with only
-  that module's charter/memory (run.ts), and having an independent reviewer
-  agent critique each resulting diff before it is committed (review.ts). run.ts
-  is the orchestrator that ties routing, worktree creation, agent execution,
-  review, commit, memory-compression ('sleep'), and worktree cleanup into one
-  end-to-end mission lifecycle."
+purpose: "Executes a single Swarm OS 'mission': turn one natural-language goal
+  into module assignments (route.ts), spawn one isolated worker agent per
+  assigned module in its own git worktree with only that module's context
+  (run.ts), have an independent read-only reviewer agent critique the resulting
+  diff before commit (review.ts), then commit, compress the module's memory
+  ('sleep'), and clean up worktrees. run.ts is the single orchestrator tying all
+  of this together end-to-end."
 owns:
   - packages/core/src/mission/**
 entryPoints:
   - packages/core/src/mission/run.ts
   - packages/core/src/mission/route.ts
   - packages/core/src/mission/review.ts
+  - packages/core/src/mission/mission-id.test.ts
 dependsOn:
-  - runtime
   - swarm-orchestration
   - workspace-git
+  - runtime
   - mapper
-fileCount: 3
+fileCount: 4

@@ -2,14 +2,13 @@
 # diffs are checked against them after every mission.
 
 name: Swarm Orchestration
-purpose: "Manages the agent swarm lifecycle and the multi-module missions built
-  on it: enforces per-module file ownership (glob matching + post-hoc diff
-  checking), splits large modules into 'areas' for finer-grained memory, runs
-  the per-module 'analyst' agent that produces a module's charter and memory,
-  verifies memory claims deterministically and adversarially, schedules
-  concurrent agent processes under a subscription rate-limit budget, and drives
-  `swarm loop` — an unattended, hours-long cycle of survey → pick task → run
-  mission → verify → merge onto a single integration branch."
+purpose: Owns the swarm agent lifecycle (wake with a scoped context pack, sleep
+  with memory compression), per-module ownership enforcement, the "areas"
+  sub-splitting mechanism for large modules' memory, the analyst agent that
+  produces a module's charter+memory, the adversarial memory verifier, a
+  rate-limit-aware concurrency scheduler for spawning agent processes, and
+  `runLoop` — the unattended survey→pick→mission→verify→merge cycle that drives
+  `swarm loop` on a single integration branch.
 owns:
   - packages/core/src/swarm/**
   - packages/core/src/loop/**
@@ -17,14 +16,13 @@ entryPoints:
   - packages/core/src/swarm/manager.ts
   - packages/core/src/swarm/analyst.ts
   - packages/core/src/swarm/verify.ts
-  - packages/core/src/swarm/ownership.ts
   - packages/core/src/swarm/areas.ts
+  - packages/core/src/swarm/ownership.ts
   - packages/core/src/swarm/scheduler.ts
   - packages/core/src/loop/run.ts
 dependsOn:
-  - runtime
-  - workspace-git
   - mission
+  - workspace-git
+  - runtime
   - architecture-analysis
-  - mapper
-fileCount: 7
+fileCount: 27
