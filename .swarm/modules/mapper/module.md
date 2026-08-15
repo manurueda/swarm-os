@@ -1,6 +1,6 @@
 # Repo Mapper
 
-Builds a deterministic, model-free structural digest of a target repo (digest.ts) and drives the four-stage `swarm map` pipeline — digest → partition → analyse → synthesise (pipeline.ts, pipeline/*.ts) — that turns that digest into a durable module map: `.swarm/system.md`, per-module `module.md` charters and `memory.md`, written via the Workspace store. Also detects when a previously-generated map has drifted from the repo's current state (detectDrift) and flags modules whose structural sub-domains ('areas') were never surveyed into per-area memory (pendingSplits).
+Turns a target repository into a durable, on-disk module map with zero speculative reading of source code. digest.ts computes a deterministic, git-derived structural fingerprint of the repo (file list, content hashes, directory tree, doc headings, manifest excerpts) that costs no model tokens. map.ts sends only that digest (never source) to one tool-less agent to propose module boundaries (slugs, ownership globs, entry points, dependencies) and renders the resulting system.md / module.md charters. pipeline.ts (mapProject) orchestrates the full incremental digest→partition→analyse→synthesise run by composing ~20 single-purpose steps under pipeline/, each taking explicit arguments instead of closing over mapProject's locals, and also exposes detectDrift (has the repo moved since the last map?) and pendingSplits (large modules whose structural sub-domains were never surveyed into per-area memory).
 
 ## Owns
 
@@ -8,10 +8,11 @@ Builds a deterministic, model-free structural digest of a target repo (digest.ts
 
 ## Read first
 
-- `packages/core/src/mapper/pipeline.ts` — mapProject() is the orchestrator — reads it top-to-bottom to see the whole digest→partition→analyse(+areas)→synthesise flow and how each pipeline/*.ts step plugs in. Also hosts detectDrift() and pendingSplits().
-- `packages/core/src/mapper/digest.ts` — buildDigest()/renderDigest() — the only thing ever sent to a model; defines RepoDigest (files, fingerprints, hash, tree, docs, manifests) that every other file in this module consumes.
-- `packages/core/src/mapper/map.ts` — mapRepository() — the single tool-less agent call that proposes module boundaries from the digest; also owns renderModuleCharter/renderSystemMap and the MODULE_MAP_SCHEMA the agent's structured output must satisfy.
-- `packages/core/src/mapper/pipeline/types.ts` — Shared shapes (MapProjectOptions, MapResult, MapModuleResult, MapProgress) that every pipeline/*.ts step and consumer imports; read this before any individual step file.
+- `packages/core/src/mapper/pipeline.ts` — The orchestrator: mapProject drives digest→partition→analyse(+areas)→synthesise, plus detectDrift and pendingSplits. Read this first to see how the pipeline/* steps compose.
+- `packages/core/src/mapper/digest.ts` — buildDigest/renderDigest: the deterministic, model-free repo scan every other piece depends on, including its own drift-detecting content fingerprints.
+- `packages/core/src/mapper/map.ts` — mapRepository: the single tool-less LLM call that proposes module boundaries from the digest, plus the empty-glob repair loop and the charter/system-map renderers.
+- `packages/core/src/mapper/pipeline/types.ts` — Shared shapes (MapProjectOptions, MapResult, MapModuleResult, MapProgress) that every pipeline/* step and the public API use; imported by steps, never imports the orchestrator.
+- `packages/core/src/mapper/pipeline/module-files.ts` — hashFiles/filesFor — the incremental-mapping primitive (per-module content fingerprint) used by planning, analysis, drift detection and area surveying alike.
 
 ## Depends on
 

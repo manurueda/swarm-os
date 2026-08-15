@@ -2,14 +2,19 @@
 # diffs are checked against them after every mission.
 
 name: Repo Mapper
-purpose: "Builds a deterministic, model-free structural digest of a target repo
-  (digest.ts) and drives the four-stage `swarm map` pipeline — digest →
-  partition → analyse → synthesise (pipeline.ts, pipeline/*.ts) — that turns
-  that digest into a durable module map: `.swarm/system.md`, per-module
-  `module.md` charters and `memory.md`, written via the Workspace store. Also
-  detects when a previously-generated map has drifted from the repo's current
-  state (detectDrift) and flags modules whose structural sub-domains ('areas')
-  were never surveyed into per-area memory (pendingSplits)."
+purpose: Turns a target repository into a durable, on-disk module map with zero
+  speculative reading of source code. digest.ts computes a deterministic,
+  git-derived structural fingerprint of the repo (file list, content hashes,
+  directory tree, doc headings, manifest excerpts) that costs no model tokens.
+  map.ts sends only that digest (never source) to one tool-less agent to propose
+  module boundaries (slugs, ownership globs, entry points, dependencies) and
+  renders the resulting system.md / module.md charters. pipeline.ts (mapProject)
+  orchestrates the full incremental digest→partition→analyse→synthesise run by
+  composing ~20 single-purpose steps under pipeline/, each taking explicit
+  arguments instead of closing over mapProject's locals, and also exposes
+  detectDrift (has the repo moved since the last map?) and pendingSplits (large
+  modules whose structural sub-domains were never surveyed into per-area
+  memory).
 owns:
   - packages/core/src/mapper/**
 entryPoints:
@@ -17,8 +22,9 @@ entryPoints:
   - packages/core/src/mapper/digest.ts
   - packages/core/src/mapper/map.ts
   - packages/core/src/mapper/pipeline/types.ts
+  - packages/core/src/mapper/pipeline/module-files.ts
 dependsOn:
   - swarm-orchestration
   - workspace-git
   - runtime
-fileCount: 40
+fileCount: 41
