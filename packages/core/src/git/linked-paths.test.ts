@@ -65,6 +65,44 @@ test('commitAll excludes a linked symlink but still commits real changes', async
   }
 });
 
+test('commitAll still commits when the linked path is itself gitignored', async () => {
+  // The case that actually broke, and the reason this cannot be done with an
+  // `:(exclude)` pathspec. Naming any explicit pathspec makes `git add` FAIL on
+  // ignored files rather than skipping them, so the exclusion worked only while
+  // the path was not ignored — and a repo that fixed its `.gitignore` to catch
+  // the symlink silently stopped committing anything at all. Missions then
+  // announced branches that had nothing on them.
+  const root = await initRepo();
+  const scratch = await mkdtemp(join(tmpdir(), 'swarm-linked-target-'));
+  try {
+    await writeFile(join(root, '.gitignore'), 'node_modules\n');
+    await symlink(scratch, join(root, 'node_modules'));
+    await writeFile(join(root, 'c.ts'), 'export const c = 1;\n');
+
+    const result = await commitAll(root, 'add c.ts', ['node_modules']);
+    assert.equal(result.ok, true, result.detail);
+
+    const lsTree = await git(root, ['ls-tree', '-r', '--name-only', 'HEAD']);
+    assert.match(lsTree.stdout, /c\.ts/, 'the real change must reach the branch');
+    assert.doesNotMatch(lsTree.stdout, /node_modules/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('commitAll reports why it failed rather than returning a bare false', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'swarm-linked-nogit-'));
+  try {
+    await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
+    const result = await commitAll(root, 'nope', []);
+    assert.equal(result.ok, false);
+    assert.ok(result.detail.length > 0, 'a silent failure is the worst outcome available');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('changedFiles omits a linked symlink but still reports a real change', async () => {
   const root = await initRepo();
   const scratch = await mkdtemp(join(tmpdir(), 'swarm-linked-target-'));

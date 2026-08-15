@@ -255,19 +255,30 @@ export async function fullDiff(worktreePath: string, base: string): Promise<stri
 /**
  * Stage and commit everything in a worktree except its linked dependencies.
  *
- * `linked` (e.g. `['node_modules']`) is excluded via pathspec magic rather
- * than an ignore file: a directory-style `.gitignore` pattern does not match
- * a symlink of the same name, and writing to the target repo's own
- * `.gitignore` is not this tool's to do.
+ * `linked` (e.g. `['node_modules']`) must be kept out of the commit: it is a
+ * symlink this tool created, pointing at an absolute path on one machine, and
+ * a directory-style ignore rule like `node_modules/` does not match a symlink
+ * of that name.
+ *
+ * Staged in two steps rather than with an `:(exclude)` pathspec. Naming any
+ * explicit pathspec changes what `git add` does about ignored files: bare
+ * `git add -A` passes over them in silence, while `git add -A -- . :(exclude)x`
+ * fails the whole command with "the following paths are ignored". So the
+ * pathspec form worked only while the path was NOT ignored, and broke the
+ * moment someone fixed their `.gitignore` — which is how missions came to
+ * report branches ready for review with nothing committed to them.
  */
 export async function commitAll(
   worktreePath: string,
   message: string,
   linked: string[] = [],
 ): Promise<{ ok: boolean; detail: string }> {
-  const exclude = linked.map((name) => `:(exclude)${name}`);
-  const add = await git(worktreePath, ['add', '-A', '--', '.', ...exclude]);
+  const add = await git(worktreePath, ['add', '-A']);
   if (!add.ok) return { ok: false, detail: add.stderr.trim() };
+  // Unstage rather than never-stage: a no-op when the path was ignored anyway.
+  for (const name of linked) {
+    await git(worktreePath, ['rm', '--cached', '-q', '--ignore-unmatch', '-r', '--', name]);
+  }
   const status = await git(worktreePath, ['status', '--porcelain']);
   if (status.stdout.trim() === '') return { ok: true, detail: 'nothing to commit' };
   const commit = await git(worktreePath, ['commit', '-m', message]);
