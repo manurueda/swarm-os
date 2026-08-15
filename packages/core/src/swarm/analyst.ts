@@ -178,6 +178,14 @@ export interface AnalyzeModuleOptions {
   /** Slugs of sibling modules, so dependencies can be named correctly. */
   siblings: Array<{ slug: string; purpose: string }>;
   systemSummary: string;
+  /**
+   * Slugs of areas already surveyed for this module, if any. Set this when the
+   * caller has run `detectAreas` and written each area's own memory file
+   * before calling the analyst — signals that module-level memory.md must
+   * hold only what is true across every area, leaving area-specific facts to
+   * the area files that already exist.
+   */
+  areaNames?: string[];
   model?: string;
   /**
    * 'standalone' replaces Claude Code's default system prompt with the analyst's
@@ -192,7 +200,8 @@ export interface AnalyzeModuleOptions {
 export async function analyzeModule(
   options: AnalyzeModuleOptions,
 ): Promise<{ analysis?: ModuleAnalysis; outcome: AgentOutcome }> {
-  const { module: spec, siblings, systemSummary } = options;
+  const { module: spec, siblings, systemSummary, areaNames } = options;
+  const hasAreas = (areaNames?.length ?? 0) > 0;
 
   const prompt = [
     `# Module: ${spec.name} (\`${spec.slug}\`)`,
@@ -214,6 +223,20 @@ export async function analyzeModule(
     '',
     systemSummary || '_not recorded_',
     '',
+    ...(hasAreas
+      ? [
+          '## This module is split into areas',
+          '',
+          `Per-area memory already exists for: ${(areaNames ?? []).join(', ')}.`,
+          'Each area was surveyed separately and already has its own memory file for what is',
+          'specific to it. The memory.md you write now is loaded by EVERY agent that wakes into',
+          'this module, whichever area it is working in — so it must hold ONLY invariants,',
+          'gotchas and interface facts that are true across every area. Leave anything specific',
+          'to a single area out of memory.md entirely; it belongs in that area\'s own file, not',
+          'here.',
+          '',
+        ]
+      : []),
     'Sibling modules you may name as dependencies:',
     '',
     ...siblings.map((s) => `- \`${s.slug}\` — ${s.purpose}`),

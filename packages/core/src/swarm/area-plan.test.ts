@@ -21,49 +21,24 @@ const area = (slug: string): AreaSpec => ({
 });
 
 const AREAS = [area('captions'), area('audio'), area('video')];
-const BUDGET = 2000;
 
-test('a module well inside its budget is not split', () => {
+test('a module with real areas is split, however little memory it has', () => {
+  // Structural trigger: `detectAreas` already decided this module has enough
+  // sub-domains. There is no memory.md yet on a first map, and that must not
+  // block the split.
   const plan = planAreas({
     areas: AREAS,
-    memoryTokens: 900,
-    budgetTokens: BUDGET,
-    hasMemory: () => false,
-  });
-  assert.deepEqual(plan.keep, []);
-  assert.deepEqual(plan.survey, []);
-});
-
-test('a module pressing its budget is split before it exceeds it', () => {
-  // 85% — splitting after the compressor has already started cutting would be
-  // too late; the knowledge is gone by then.
-  const plan = planAreas({
-    areas: AREAS,
-    memoryTokens: 1700,
-    budgetTokens: BUDGET,
     hasMemory: () => false,
   });
   assert.equal(plan.keep.length, 3);
   assert.equal(plan.survey.length, 3);
 });
 
-test('a module over its budget is split', () => {
-  const plan = planAreas({
-    areas: AREAS,
-    memoryTokens: 2198,
-    budgetTokens: BUDGET,
-    hasMemory: () => false,
-  });
-  assert.equal(plan.keep.length, 3);
-});
-
 test('a module that does not decompose is left whole', () => {
-  // Splitting is not always available. A module over budget whose code has no
-  // structure to split along needs a different remedy, not a worse split.
+  // Splitting is not always available. A module whose code has no structure to
+  // split along needs a different remedy, not a worse split.
   const plan = planAreas({
     areas: [],
-    memoryTokens: 5000,
-    budgetTokens: BUDGET,
     hasMemory: () => false,
   });
   assert.deepEqual(plan.keep, []);
@@ -73,8 +48,6 @@ test('a module that does not decompose is left whole', () => {
 test('an area that already has memory is kept but not surveyed again', () => {
   const plan = planAreas({
     areas: AREAS,
-    memoryTokens: 2100,
-    budgetTokens: BUDGET,
     hasMemory: (slug) => slug === 'captions',
   });
 
@@ -89,8 +62,6 @@ test('an area that already has memory is kept but not surveyed again', () => {
 test('force re-surveys every area, including ones with memory', () => {
   const plan = planAreas({
     areas: AREAS,
-    memoryTokens: 2100,
-    budgetTokens: BUDGET,
     hasMemory: () => true,
     force: true,
   });
@@ -100,20 +71,8 @@ test('force re-surveys every area, including ones with memory', () => {
 test('nothing left to survey still keeps the areas', () => {
   const plan = planAreas({
     areas: AREAS,
-    memoryTokens: 2100,
-    budgetTokens: BUDGET,
     hasMemory: () => true,
   });
   assert.equal(plan.keep.length, 3, 'keep drives pruning — emptying it would delete the areas');
   assert.deepEqual(plan.survey, []);
-});
-
-test('a zero budget does not divide by itself into a split', () => {
-  const plan = planAreas({
-    areas: AREAS,
-    memoryTokens: 0,
-    budgetTokens: 0,
-    hasMemory: () => false,
-  });
-  assert.deepEqual(plan.keep, []);
 });
