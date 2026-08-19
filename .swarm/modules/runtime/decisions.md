@@ -1,3 +1,8 @@
 # Agent Runtime Port — decisions
 
 Append-only log. One entry per consequential choice, newest at the bottom.
+
+## 2026-08-17 — planAreas in packages/core/src/swarm/areas.ts is dead code. Nothing calls it: the only references are its own definition and the re-export in index.ts. Its decision - which of a module's detected areas still need surveying, and whether to split at all - was inlined into two separate places when the trigger became structural. survey-module-areas.ts now writes 'force ? areas : areas.filter(a => !recorded.has(a.slug))' and pendingSplits in pipeline.ts writes 'areas.some(a => !recorded.has(a.slug))'. Two copies of one rule, and the five tests in area-plan.test.ts now cover a function no production path reaches. This is precisely the failure this codebase just spent a session fixing: a decision that nothing calls, invisible because it looks alive. Restore planAreas as the single place that decision is made, with the structural trigger it has now, and call it from BOTH survey-module-areas.ts and pendingSplits so the rule exists once. Its tests must then be testing the real path. While there: pendingSplits takes a SwarmConfig it no longer uses - it is named _config - so drop the parameter and update callers; and SPLIT_AT in areas.ts is dead, kept alive only by index.ts re-exporting it, so remove both. Change no behaviour. npm test must pass.
+
+- Follow-up: Run `npm test` (or at minimum `tsc --build packages/core`) in this worktree to confirm the barrel change compiles cleanly once areas.ts's SPLIT_AT removal lands.
+- Follow-up: Coordinate with whichever module owns packages/core/src/swarm/areas.ts to confirm SPLIT_AT is actually being deleted there in the same effort, since I cannot modify that file myself.

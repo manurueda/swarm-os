@@ -102,3 +102,13 @@ test('a module whose own files changed is reported as drift', async () => {
   assert.equal(result.drifted, true);
   assert.deepEqual(result.changedModules, ['billing']);
 });
+
+test('a config-only workspace reports zero modules, so the CLI maps instead of refusing', async () => {
+  // A hand-written config.yaml with no state and no modules used to read as
+  // "not drifted", and the CLI took that for "already mapped" — the first map
+  // then refused to run without --force.
+  const workspace = await tempWorkspace();
+  const drift = await detectDrift(workspace);
+  assert.equal(drift.moduleCount, 0);
+  assert.equal(drift.drifted, false);
+});

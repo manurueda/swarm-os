@@ -440,7 +440,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
 
     const changed = repoIsGit ? await changedFiles(worktreePath, base, linked) : [];
     const ownership = checkOwnership(changed, spec.owns);
-    const stat = repoIsGit ? await diffStat(worktreePath, base) : '';
+    const stat = repoIsGit ? await diffStat(worktreePath, base, linked) : '';
 
     // Review before commit: the author cannot check its own cross-module
     // guesses, and this is the only step that can.
@@ -454,7 +454,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
           cwd: worktreePath,
           goal,
           task: assignment.task,
-          diff: await fullDiff(worktreePath, base),
+          diff: await fullDiff(worktreePath, base, linked),
           ...(workReport
             ? {
                 authorReport: [
@@ -606,7 +606,9 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
 
   const costUsd = results.reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
 
-  record.status = results.every((r) => r.ok) ? 'review' : 'failed';
+  const delivered = results.filter((r) => r.ok).length;
+  record.status =
+    delivered === results.length ? 'review' : delivered > 0 ? 'partial' : 'failed';
   record.finishedAt = new Date().toISOString();
   await workspace.writeMission(record);
   await workspace.writeMissionFile(id, 'report.md', renderMissionReport(goal, plan, results));

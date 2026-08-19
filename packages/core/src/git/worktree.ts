@@ -232,23 +232,59 @@ export async function changedFiles(
   const files = new Set<string>();
   for (const line of `${tracked.stdout}\n${untracked.stdout}`.split('\n')) {
     const trimmed = line.trim();
-    if (trimmed && !isLinkedPath(trimmed, linked)) files.add(trimmed);
+    if (trimmed && !isLinkedPath(trimmed, hiddenFromWork(linked))) files.add(trimmed);
   }
   return [...files].sort();
 }
 
+/**
+ * Pathspecs that hide linked dependency names from a diff.
+ *
+ * `linkDependencies` plants symlinks (`.venv`, `node_modules`) in every worktree.
+ * `commitAll` and `changedFiles` already exclude them, but the diff handed to the
+ * reviewer did not — so every mission's reviewer rediscovered the same symlink and
+ * spent a finding on it, once at blocker severity. The reviewer must see exactly
+ * what can land, nothing else.
+ */
+/**
+ * The machinery's own directory. Work agents may scribble in `.swarm/` (their
+ * charter tells them to note decisions), but those edits must never ride a
+ * mission branch: the memory compressor rewrites the same files on the main
+ * checkout at mission end, so a branch carrying `.swarm/**` guarantees a merge
+ * conflict with the machinery itself, and reviewers kept flagging the edits as
+ * out-of-bounds noise. Memory belongs to the compressor; branches carry work.
+ */
+const SWARM_DIR = '.swarm';
+
+function hiddenFromWork(linked: string[]): string[] {
+  return [...linked, SWARM_DIR];
+}
+
+function excludeLinked(linked: string[]): string[] {
+  const hidden = hiddenFromWork(linked);
+  return ['--', '.', ...hidden.map((name) => `:(exclude)${name}`)];
+}
+
 /** Unified diff stat for a worktree, for the mission report. */
-export async function diffStat(worktreePath: string, base: string): Promise<string> {
-  const res = await git(worktreePath, ['diff', '--stat', base]);
+export async function diffStat(
+  worktreePath: string,
+  base: string,
+  linked: string[] = [],
+): Promise<string> {
+  const res = await git(worktreePath, ['diff', '--stat', base, ...excludeLinked(linked)]);
   return res.ok ? res.stdout.trim() : '';
 }
 
 /** Full unified diff of a worktree against its base, including new files. */
-export async function fullDiff(worktreePath: string, base: string): Promise<string> {
+export async function fullDiff(
+  worktreePath: string,
+  base: string,
+  linked: string[] = [],
+): Promise<string> {
   // Staging untracked files first is what makes them appear in the diff at all;
   // a review that cannot see newly added files is close to useless.
   await git(worktreePath, ['add', '-AN']);
-  const res = await git(worktreePath, ['diff', base]);
+  const res = await git(worktreePath, ['diff', base, ...excludeLinked(linked)]);
   return res.ok ? res.stdout : '';
 }
 
@@ -276,7 +312,7 @@ export async function commitAll(
   const add = await git(worktreePath, ['add', '-A']);
   if (!add.ok) return { ok: false, detail: add.stderr.trim() };
   // Unstage rather than never-stage: a no-op when the path was ignored anyway.
-  for (const name of linked) {
+  for (const name of hiddenFromWork(linked)) {
     await git(worktreePath, ['rm', '--cached', '-q', '--ignore-unmatch', '-r', '--', name]);
   }
   const status = await git(worktreePath, ['status', '--porcelain']);

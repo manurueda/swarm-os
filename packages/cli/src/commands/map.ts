@@ -50,7 +50,9 @@ export async function mapCommand(args: ParsedArgs): Promise<number> {
     // load budget while every fingerprint still matches.
     const pending = await pendingSplits(workspace, config);
 
-    if (!drift.drifted && pending.length === 0) {
+    // Zero modules means never mapped, whatever the drift check says — a repo
+    // with a hand-written config.yaml must get its first map, not a refusal.
+    if (!drift.drifted && pending.length === 0 && drift.moduleCount > 0) {
       note(`Already mapped and unchanged since ${drift.mappedAt?.slice(0, 10) ?? 'last run'}.`);
       note('Nothing to re-analyse. Use --force to redo everything, --repartition to redraw boundaries.');
       await printMap(workspace);

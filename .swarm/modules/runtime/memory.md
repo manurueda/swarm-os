@@ -13,6 +13,7 @@ _Durable knowledge for the `runtime` swarm. Read on wake, rewritten on sleep._
 - applyUpdate() for a git install refuses to run if `git status --porcelain` is non-empty (any local modification is treated as work-in-progress and reported as blocked); it only fast-forwards via `git pull --ff-only`. <sub>`packages/core/src/update/index.ts`</sub>
 - backgroundUpdate() is meant to run in a detached background process; the foreground/CLI path should only ever read the cached update.json via readUpdateStatus(), never call checkForUpdate/applyUpdate synchronously, so commands are never slowed down. <sub>`packages/core/src/update/index.ts` [doc]</sub>
 - updatesDisabled() (SWARM_NO_UPDATE env var, any value other than '', '0', 'false') must be checked before any update check/apply path runs. <sub>`packages/core/src/update/index.ts`</sub>
+- index.ts's export lines are one-per-source-file re-export statements; removing a single named export from a line (rather than deleting the whole line) is a safe, surgical edit as long as the other names on that line are preserved verbatim. <sub>`packages/core/src/index.ts`</sub>
 
 ## Gotchas
 
@@ -22,6 +23,7 @@ _Durable knowledge for the `runtime` swarm. Read on wake, rewritten on sleep._
 - 'user' type stream-json events (synthetic tool-result turns) always produce agent.tool_result events with tool: '' — the tool name is not recoverable from that event shape, so consumers cannot correlate a result to which tool produced it via this field alone. <sub>`packages/core/src/runtime/stream-json.ts`</sub>
 - detectInstall() determines git-vs-npm by walking up from the running module's own file path for the nearest package.json (assumed to be @swarm-os/cli) and then further up for a .git directory — depends on the current monorepo layout (dist/ nested under a repo root with .git) and will misclassify if that layout changes. <sub>`packages/core/src/update/index.ts`</sub>
 - index.ts re-exports far more than this module owns (workspace, mapper, swarm, architecture, ui, mission, loop, git — all owned by sibling modules); it is the single flat @swarm-os/core barrel for the entire package, not scoped to runtime/update. Any edit here risks breaking every other module's public surface. <sub>`packages/core/src/index.ts`</sub>
+- In at least one session, Bash invocations of `npm test` / `npx tsc --noEmit` (even with dangerouslyDisableSandbox) were blocked with 'This command requires approval' and never approved — reports of "tests pass" for index.ts / barrel edits may be verified only by grep, not execution. Ask the user to pre-approve or run verification commands themselves before trusting such a report.
 
 ## Landmarks
 
@@ -33,7 +35,7 @@ _Durable knowledge for the `runtime` swarm. Read on wake, rewritten on sleep._
 - `packages/core/src/runtime/system-tier.ts` — standaloneSystemPrompt() (no-tools agents) and standaloneAgentPrompt() (tool-bearing agents) — both replace rather than append to Claude Code's default system prompt, for token savings.
 - `packages/core/src/runtime/baseline.ts` — agentBaselineTokens(toolCount) interpolation/extrapolation over 3 measured anchors; CONTEXT_WINDOW=200_000 constant.
 - `packages/core/src/update/index.ts` — Self-update: detectInstall(), checkForUpdate(), applyUpdate(), backgroundUpdate() (detached check+apply), status cache under ~/.swarm/update.json.
-- `packages/core/src/index.ts` — Flat barrel export for all of @swarm-os/core — types, runtime, update, plus every sibling module's public surface (workspace, mapper, swarm, architecture, ui, mission, loop, git).
+- `packages/core/src/index.ts` — Flat barrel export for all of @swarm-os/core — types, runtime, update, plus every sibling module's public surface (workspace, mapper, swarm, architecture, ui, mission, loop, git). No longer re-exports SPLIT_AT from swarm/areas.ts (removed as dead export, 2026-08-17); still re-exports detectAreas, areaAsModule, planAreas, renderAreaIndex from './swarm/areas.js'.
 
 ## Public interface
 
@@ -49,4 +51,4 @@ _Durable knowledge for the `runtime` swarm. Read on wake, rewritten on sleep._
 
 ---
 
-_Surveyed 2026-08-15 by the `runtime` analyst, reading only this module's paths._
+_Surveyed 2026-08-15 by the `runtime` analyst, reading only this module's paths. Updated 2026-08-17: index.ts edited to drop SPLIT_AT re-export (companion change lives in swarm module's areas.ts)._

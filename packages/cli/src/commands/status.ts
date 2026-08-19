@@ -102,9 +102,11 @@ export async function statusCommand(args: ParsedArgs): Promise<number> {
       const mark =
         m.status === 'review' || m.status === 'done'
           ? c.green(symbols.ok)
-          : m.status === 'failed'
-            ? c.red(symbols.fail)
-            : c.gray(symbols.bullet);
+          : m.status === 'partial'
+            ? c.yellow('◐')
+            : m.status === 'failed'
+              ? c.red(symbols.fail)
+              : c.gray(symbols.bullet);
       const violations = Object.values(m.agents).reduce(
         (sum, a) => sum + (a.ownershipViolations?.length ?? 0),
         0,

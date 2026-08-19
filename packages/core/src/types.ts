@@ -53,7 +53,11 @@ export interface SwarmRecord {
 // Missions
 // ---------------------------------------------------------------------------
 
-export type MissionStatus = 'planned' | 'running' | 'review' | 'done' | 'failed' | 'aborted';
+// 'partial': some modules delivered a reviewable branch and at least one did not
+// (blocked on a sibling's unpublished interface, usually). Calling that whole
+// mission 'failed' erased real work: one run delivered two of three modules,
+// both merged, and history said ✗ failed.
+export type MissionStatus = 'planned' | 'running' | 'review' | 'partial' | 'done' | 'failed' | 'aborted';
 
 export interface MissionRecord {
   id: string;

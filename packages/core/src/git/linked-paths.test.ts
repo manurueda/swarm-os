@@ -11,7 +11,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -119,5 +119,51 @@ test('changedFiles omits a linked symlink but still reports a real change', asyn
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('fullDiff and diffStat hide the linked symlink the way commitAll does', async () => {
+  const root = await initRepo();
+  const scratch = await mkdtemp(join(tmpdir(), 'swarm-linked-target-'));
+  try {
+    await symlink(scratch, join(root, '.venv'));
+    await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
+
+    const { fullDiff, diffStat } = await import('./worktree.js');
+    const diff = await fullDiff(root, 'HEAD', ['.venv']);
+    const stat = await diffStat(root, 'HEAD', ['.venv']);
+
+    // The real change is visible; the machinery's symlink is not. Every mission's
+    // reviewer used to spend a finding on that symlink, once at blocker severity.
+    assert.match(diff, /a\.ts/);
+    assert.doesNotMatch(diff, /\.venv/);
+    assert.doesNotMatch(stat, /\.venv/);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('.swarm edits never ride a work branch: invisible to diff, changedFiles and commit', async () => {
+  const root = await initRepo();
+  try {
+    const { fullDiff, changedFiles, commitAll } = await import('./worktree.js');
+    await mkdir(join(root, '.swarm', 'modules', 'billing'), { recursive: true });
+    await writeFile(join(root, '.swarm', 'modules', 'billing', 'decisions.md'), 'noted\n');
+    await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
+
+    const changed = await changedFiles(root, 'HEAD');
+    assert.deepEqual(changed, ['a.ts']);
+
+    const diff = await fullDiff(root, 'HEAD');
+    assert.doesNotMatch(diff, /\.swarm/);
+
+    const result = await commitAll(root, 'work');
+    assert.equal(result.ok, true);
+    const shown = await git(root, ['show', '--name-only', '--format=', 'HEAD']);
+    assert.match(shown.stdout, /a\.ts/);
+    assert.doesNotMatch(shown.stdout, /\.swarm/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

@@ -298,6 +298,15 @@ export async function detectDrift(workspace: Workspace): Promise<{
   mappedAt?: string;
   /** True when no fingerprint is on record, so drift cannot be ruled out. */
   unknown?: boolean;
+  /**
+   * How many modules the map currently holds. Zero means the workspace has a
+   * config but has never actually been mapped — "not drifted" is then true but
+   * useless, and a caller that treats it as "already mapped" will refuse to do
+   * the first map. That exact misreading shipped: a hand-written config.yaml
+   * made `swarm map` answer "Already mapped and unchanged" on a repo with no
+   * map at all, and only --force would proceed.
+   */
+  moduleCount: number;
 }> {
   const state = await workspace.readState();
   const modules = await workspace.listModules();
@@ -307,8 +316,8 @@ export async function detectDrift(workspace: Workspace): Promise<{
   // reporting "unchanged" there is a claim the data does not support.
   if (!state.digestHash) {
     return modules.length > 0
-      ? { drifted: true, unknown: true, changedModules: modules.map((m) => m.slug) }
-      : { drifted: false, changedModules: [] };
+      ? { drifted: true, unknown: true, changedModules: modules.map((m) => m.slug), moduleCount: modules.length }
+      : { drifted: false, changedModules: [], moduleCount: 0 };
   }
 
   const digest = await buildDigest(workspace.repoRoot);
@@ -319,11 +328,13 @@ export async function detectDrift(workspace: Workspace): Promise<{
       ? {
           drifted: true,
           changedModules: unanalysed.map((m) => m.slug),
+          moduleCount: modules.length,
           ...(state.mappedAt ? { mappedAt: state.mappedAt } : {}),
         }
       : {
           drifted: false,
           changedModules: [],
+          moduleCount: modules.length,
           ...(state.mappedAt ? { mappedAt: state.mappedAt } : {}),
         };
   }
@@ -343,6 +354,7 @@ export async function detectDrift(workspace: Workspace): Promise<{
   return {
     drifted: changed.length > 0,
     changedModules: changed,
+    moduleCount: modules.length,
     ...(state.mappedAt ? { mappedAt: state.mappedAt } : {}),
   };
 }
