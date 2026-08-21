@@ -10,14 +10,36 @@ import {
   ClaudeCodeLocalRuntime,
   detectBillingEnv,
   detectDrift,
+  detectVerifyCommand,
   isGitRepo,
   type PreflightCheck,
+  type VerifyCommandDetection,
 } from '@swarm-os/core';
 
 import type { ParsedArgs } from '../args.js';
 import { flagBool } from '../args.js';
 import { loadContext } from '../context.js';
 import { c, heading, line, note, symbols, table } from '../ui.js';
+
+/**
+ * An empty `verifyCommand` silently disables the whole mission verify loop —
+ * no build, no test, no gate. Pulled out as plain strings so the wording can
+ * be pinned without driving a full `doctorCommand` run or touching the
+ * filesystem `detectVerifyCommand` reads from.
+ */
+export function verifyCommandCheckLines(detection: VerifyCommandDetection): string[] {
+  const lines = [
+    'no verifyCommand set — the mission verify loop is disabled',
+    "  no build, no test, no gate: an unattended mission merges on the reviewer's word alone.",
+  ];
+  if (detection.command) {
+    lines.push(`  detected: ${detection.command} (${detection.reason})`);
+    lines.push('  set it with `verifyCommand:` in .swarm/config.yaml, or re-run `swarm map` to accept it.');
+  } else {
+    lines.push('  nothing detected — set `verifyCommand:` in .swarm/config.yaml, or re-run `swarm map`.');
+  }
+  return lines;
+}
 
 export async function doctorCommand(args: ParsedArgs): Promise<number> {
   const { workspace, runtime, config } = await loadContext(args);
@@ -66,6 +88,11 @@ export async function doctorCommand(args: ParsedArgs): Promise<number> {
       line(
         `  ${c.yellow(symbols.warn)} ${drift.changedModules.length} module(s) changed since mapping — run \`swarm map\``,
       );
+    }
+    if (!config.verifyCommand) {
+      const [first, ...rest] = verifyCommandCheckLines(detectVerifyCommand(workspace.repoRoot));
+      if (first) line(`  ${c.yellow(symbols.warn)} ${first}`);
+      for (const l of rest) note(`  ${l}`);
     }
   }
 

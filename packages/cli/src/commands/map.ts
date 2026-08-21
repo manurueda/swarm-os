@@ -150,6 +150,16 @@ export async function mapCommand(args: ParsedArgs): Promise<number> {
   return result.modules.some((m) => m.status === 'failed') ? 1 : 0;
 }
 
+/**
+ * The mapper only sets `verifyCommandMessage` when it had something worth
+ * reporting: a chosen command and why, or that nothing was detected. Pulled
+ * out as a plain string so the wording can be pinned without driving a full
+ * `mapCommand` run.
+ */
+export function verifyCommandNote(result: MapResult): string | undefined {
+  return result.verifyCommandMessage ? `  ${result.verifyCommandMessage}` : undefined;
+}
+
 async function printMapResult(workspace: Workspace, result: MapResult): Promise<void> {
   heading(`${result.repoName} — ${result.modules.length} modules, ${result.totalFiles} files`);
 
@@ -208,6 +218,11 @@ async function printMapResult(workspace: Workspace, result: MapResult): Promise<
   note(`  Every swarm is asleep. Total memory on disk: ${formatTokens(result.totalMemoryTokens)} tokens.`);
   note(`  That is what a mission loads — not the ${result.totalFiles} files.`);
   line();
+  const verifyNote = verifyCommandNote(result);
+  if (verifyNote) {
+    note(verifyNote);
+    line();
+  }
   note(`  ${workspace.rel(workspace.root)}/`);
   note(`    system.md            the map`);
   note(`    modules/<slug>/      charter, memory, decisions, ownership`);
