@@ -4,42 +4,47 @@ _Durable knowledge for the `mission` swarm. Read on wake, rewritten on sleep._
 
 ## Invariants
 
-- missionId(goal, now) must be a function of the ENTIRE goal string (via a sha256 fingerprint suffix), not just a slug of its first words — two goals differing only after word six previously collided on the same mission directory and overwrote each other's plan/report/event log. <sub>`packages/core/src/mission/run.ts`</sub>
-- runMission() always calls workspace.resetMissionLog(id) before logging, because the same goal always maps to the same mission id/directory, so a stale log from a previous run of the identical goal must be cleared first. <sub>`packages/core/src/mission/run.ts`</sub>
-- Worktrees are only removed after a module's changes are committed; if a worktree has uncommitted changed files it is deliberately kept (and reported) rather than deleted, so in-progress/failed-commit work is never silently lost. <sub>`packages/core/src/mission/run.ts`</sub>
-- A commit failure (commitAll ok:false) is treated as a distinct, serious outcome (commitError) — the code comment explicitly calls a silently-failed commit 'the worst outcome available' because the branch would be announced ready with nothing on it. <sub>`packages/core/src/mission/run.ts`</sub>
-- Review runs before commit but is advisory-only: a reject verdict marks the MissionModuleResult as not ok, but the commit still happens regardless of verdict (committed is computed independently of review). Review failures (thrown errors) are swallowed so a broken reviewer never loses the author's work. <sub>`packages/core/src/mission/run.ts`</sub>
-- The router (routeMission) is given zero tools (tools: []) so it cannot explore the repo itself — routing decisions must come only from the system summary and one line per module. <sub>`packages/core/src/mission/route.ts`</sub>
-- parsePlan() silently drops any assignment whose module slug is not in the known module set (hallucinated slugs), rather than erroring the whole mission. <sub>`packages/core/src/mission/route.ts`</sub>
-- The reviewer agent is restricted to tools: ['Read','Grep','Glob'] — it is structurally read-only and cannot edit the worktree it is reviewing. <sub>`packages/core/src/mission/review.ts`</sub>
-- reviewModuleChange truncates diffs over 60,000 chars (MAX_DIFF_CHARS) with a note telling the reviewer to read files directly for the rest, rather than sending the whole diff. <sub>`packages/core/src/mission/review.ts`</sub>
-- Worker agents (module role) run with settingSources: 'project' inside the target repo's own worktree so the target project's own Claude settings apply, unlike the router/reviewer which use standalone/override system prompts. <sub>`packages/core/src/mission/run.ts`</sub>
+- missionId(goal) is deterministic per exact goal string (date + first 6 words slugged + sha256(goal).slice(0,6)); two goals sharing their first six words but differing later still get different ids via the hash fingerprint. <sub>`packages/core/src/mission/run.ts`</sub>
+- runMission() calls workspace.resetMissionLog(id) before doing any routing/work, because same goal => same id => same mission directory; a second run of the identical goal wipes the previous run's event log/plan/report. <sub>`packages/core/src/mission/run.ts`</sub>
+- A worktree is only removed via removeWorktree() after the module's commit succeeded (or there were zero changed files); if changedFiles.length > 0 and committed is false, the worktree is deliberately kept and reported, never silently deleted. <sub>`packages/core/src/mission/run.ts`</sub>
+- reviewModuleChange() failures are caught and swallowed (empty catch) in runMission — a broken reviewer never loses or blocks the author's committed work. <sub>`packages/core/src/mission/run.ts`</sub>
+- The router agent is spawned with tools: [] — it must decide routing purely from the system summary + one-line module descriptions, never explore the filesystem itself. <sub>`packages/core/src/mission/route.ts`</sub>
+- The reviewer agent is spawned with tools restricted to ['Read','Grep','Glob'] only — it is structurally read-only and cannot edit the diff it is judging. <sub>`packages/core/src/mission/review.ts`</sub>
+- parsePlan() (route.ts) drops any assignment whose module slug is not in the known module set, or whose task/module fields are missing — a hallucinated slug is silently discarded rather than spawning a worker for a nonexistent module. <sub>`packages/core/src/mission/route.ts`</sub>
+- A module result's ok flag requires outcome.ok AND workReport.status !== 'blocked' AND review.verdict !== 'reject'; a 'changes-needed' review verdict does NOT flip ok to false. <sub>`packages/core/src/mission/run.ts`</sub>
+- Diffs longer than MAX_DIFF_CHARS (60,000) are truncated before being shown to the reviewer, with an explicit note telling it to read the files directly for the rest. <sub>`packages/core/src/mission/review.ts`</sub>
+- record.status after all modules run is 'review' when every module delivered (delivered === results.length), 'partial' when some but not all delivered, 'failed' when none did — it is never set to a literal 'complete' state. <sub>`packages/core/src/mission/run.ts`</sub>
 
 ## Gotchas
 
-- parseReview() defaults an unparseable/failed reviewer outcome to verdict 'approve' (with an error field set), not to 'reject' or 'changes-needed' — a reviewer agent that crashes or returns malformed JSON does NOT block the mission; it silently approves. <sub>`packages/core/src/mission/review.ts`</sub>
-- The whole point of the reviewer's charter (documented in the file's own header comment) is a real historical incident: a worker agent produced code that compiled, stayed inside its module boundary, reported 'complete', yet invented a neighbouring module's CLI syntax because it structurally could not have known better — this is why cross-module contract checking is listed as the reviewer's #1, highest-priority check. <sub>`packages/core/src/mission/review.ts`</sub>
-- MissionModuleResult.ok is false if the worker reports status 'blocked' OR the reviewer verdict is 'reject' OR the agent outcome itself failed — but a module can still be 'committed: true' even when ok is false, since commit happens independently of the ok computation. <sub>`packages/core/src/mission/run.ts`</sub>
-- If the goal is routed via the explicit `modules` option (bypassing the router), the MissionPlan is synthesized with the SAME task text (the raw goal) assigned identically to every named module — there is no per-module task tailoring in that path, unlike normal routing which writes a distinct self-contained task per module. <sub>`packages/core/src/mission/run.ts`</sub>
-- renderModuleReport() (fed into sleepSwarm's memory compression) intentionally shows only that module's own slice of the mission — not other modules' changes — reinforcing the isolation invariant even at the memory-writing stage. <sub>`packages/core/src/mission/run.ts`</sub>
+- MissionResult.costUsd only sums each result's r.costUsd (the work agent's cost). Router cost, per-module reviewer cost (result.review.costUsd), and sleep/compression cost are NOT included in the returned top-level costUsd, even though they appear in the event log and review objects individually. <sub>`packages/core/src/mission/run.ts`</sub>
+- record.status of 'review' after a fully successful mission is easy to misread as an in-progress/pending state; it actually means 'all modules delivered, ready for human/next-stage review', not that anything is still running. <sub>`packages/core/src/mission/run.ts`</sub>
+- If the target repo is not a git repo (isGitRepo() false), worktreePath falls back to workspace.repoRoot itself — the worker agent edits the real checkout directly with no isolation, no branch, no commit, no diff-based review or ownership check (changed=[] always). <sub>`packages/core/src/mission/run.ts`</sub>
+- dryRun stops immediately after routing and writing plan.md/mission record (status 'planned') — no worktree, no digest build, no agents at all are spawned even though the plan was computed. <sub>`packages/core/src/mission/run.ts`</sub>
+- sleepSwarm() failure during harvest is caught and the swarm is force-marked 'sleeping' with no memory compression having happened — a broken compressor never blocks mission completion, but memory quietly does not improve for that module. <sub>`packages/core/src/mission/run.ts`</sub>
+- workerCharter() embeds a long, fixed set of engineering-style rules (tests-first, one-reason-to-change, no speculative config, never refactor+behave-change together, etc.) directly as a template literal in run.ts — it is not configurable per module or per mission, and is identical for every worker agent regardless of language/stack. <sub>`packages/core/src/mission/run.ts`</sub>
+- options.modules (the --modules override) completely bypasses routeMission(); the resulting plan has task === goal verbatim for every listed module, with no per-module rationale and no attempt to trim to the fewest modules. <sub>`packages/core/src/mission/run.ts`</sub>
 
 ## Landmarks
 
-- `packages/core/src/mission/run.ts` — runMission() orchestrator; missionId(); WORK_REPORT_SCHEMA/WorkReport; MissionProgress/MissionModuleResult/MissionResult types; renderMissionReport()/renderModuleReport() markdown renderers; workerCharter() system prompt for module agents.
-- `packages/core/src/mission/route.ts` — routeMission(); ROUTE_SCHEMA; ROUTER_CHARTER; parsePlan() (silently drops hallucinated module slugs); renderPlan().
-- `packages/core/src/mission/review.ts` — reviewModuleChange(); REVIEW_SCHEMA; REVIEWER_CHARTER (the ordered checklist reviewers follow: cross-module contracts first, then wiring, task fidelity, verification truthfulness, correctness, discipline); parseReview() defaults to 'approve' on unparseable/failed output.
+- `packages/core/src/mission/run.ts` — runMission() orchestrator; missionId(); WORK_REPORT_SCHEMA/WorkReport; workerCharter() (large fixed worker system prompt); renderModuleReport()/renderMissionReport() for mission markdown artifacts
+- `packages/core/src/mission/route.ts` — routeMission(), ROUTE_SCHEMA, ROUTER_CHARTER, renderPlan(), parsePlan() (silently drops hallucinated module slugs)
+- `packages/core/src/mission/review.ts` — reviewModuleChange(), REVIEW_SCHEMA, REVIEWER_CHARTER (6-point check order), MAX_DIFF_CHARS=60000 truncation
+- `packages/core/src/mission/mission-id.test.ts` — Only test file in the module; specifies the exact shape of a mission id: `<date>-<first-6-slug-words>-<sha256-of-full-goal, 6 hex chars>`
 
 ## Public interface
 
-- runMission(options: RunMissionOptions): Promise<MissionResult> — packages/core/src/mission/run.ts, re-exported from packages/core/src/index.ts
-- missionId(goal, now?): string — packages/core/src/mission/run.ts
-- WORK_REPORT_SCHEMA, WorkReport, MissionProgress, MissionModuleResult, MissionResult, RunMissionOptions — packages/core/src/mission/run.ts
-- routeMission(options: RouteOptions): Promise<{plan?: MissionPlan; outcome: AgentOutcome}> — packages/core/src/mission/route.ts
-- renderPlan(goal, plan): string, ROUTE_SCHEMA — packages/core/src/mission/route.ts
-- reviewModuleChange(options: ReviewOptions): Promise<ModuleReview> — packages/core/src/mission/review.ts
-- REVIEW_SCHEMA, ModuleReview, ReviewFinding — packages/core/src/mission/review.ts
-- Consumed by packages/core/src/loop/run.ts (the autonomous swarm-loop) and by the CLI's `swarm mission` command via the @swarm-os/core index barrel
+- runMission(options: RunMissionOptions): Promise<MissionResult> — the module's sole orchestrator entry point
+- missionId(goal: string, now?: Date): string
+- RunMissionOptions / MissionResult / MissionModuleResult / MissionProgress types
+- WorkReport / WORK_REPORT_SCHEMA
+- routeMission(options: RouteOptions): Promise<{ plan?: MissionPlan; outcome: AgentOutcome }>
+- renderPlan(goal, plan): string
+- ROUTE_SCHEMA
+- reviewModuleChange(options: ReviewOptions): Promise<ModuleReview>
+- ModuleReview / ReviewFinding types
+- REVIEW_SCHEMA
 
 ---
 
-_Surveyed 2026-08-15 by the `mission` analyst, reading only this module's paths._
+_Surveyed 2026-08-21 by the `mission` analyst, reading only this module's paths._

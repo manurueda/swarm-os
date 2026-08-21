@@ -2,17 +2,17 @@
 # diffs are checked against them after every mission.
 
 name: CLI & Product Surface
-purpose: "The user-facing CLI (`@swarm-os/cli`, bin `swarm`) plus the repo's
-  root docs/manifests. It parses argv, resolves a
-  Workspace/AgentRuntime/SwarmConfig context, and dispatches to one handler per
-  subcommand (map, status, mission, missions, memory, verify, refactor, ui,
-  sleep, wake, loop, update). It owns zero domain logic — mapping, mission
-  routing/orchestration, workspace/git, and the runtime port are all imported
-  wholesale from `@swarm-os/core` — and contributes only: argv parsing
-  (args.ts), context resolution (context.ts), terminal rendering including a
-  live in-place multi-row status board (ui.ts), a localhost-only HTTP server for
-  `swarm ui --serve` (server.ts), and self-update scheduling around every
-  command invocation (commands/update.ts)."
+purpose: The user-facing `swarm` CLI (@swarm-os/cli) plus the repo root
+  docs/manifests. Parses argv (args.ts), resolves a
+  Workspace/AgentRuntime/SwarmConfig context (context.ts), and dispatches to one
+  handler per subcommand under commands/ (doctor, map, status, mission/missions,
+  memory, verify, refactor, ui, sleep, wake, loop, update). Owns terminal
+  rendering (ui.ts, including a live in-place multi-row status board), a
+  localhost-only HTTP server for `swarm ui --serve` (server.ts), and self-update
+  scheduling wrapped around every invocation (commands/update.ts). Contains zero
+  domain logic itself — mapping, mission orchestration, workspace/git,
+  verification, refactor-signal analysis and the runtime port are all imported
+  from @swarm-os/core.
 owns:
   - packages/cli/**
   - README.md
@@ -24,16 +24,17 @@ owns:
   - .gitignore
 entryPoints:
   - packages/cli/src/main.ts
-  - packages/cli/src/context.ts
   - packages/cli/src/args.ts
+  - packages/cli/src/context.ts
   - packages/cli/src/ui.ts
   - packages/cli/src/server.ts
+  - packages/cli/src/commands/update.ts
 dependsOn:
   - runtime
-  - workspace-git
   - mission
   - mapper
   - swarm-orchestration
-  - ui-observability
+  - workspace-git
   - architecture-analysis
-fileCount: 26
+  - ui-observability
+fileCount: 27

@@ -4,51 +4,55 @@ _Durable knowledge for the `runtime` swarm. Read on wake, rewritten on sleep._
 
 ## Invariants
 
-- scrubEnv() must be applied before spawning any claude/git/npm child; it strips BILLING_ENV_VARS (ANTHROPIC_API_KEY etc.) and NESTING_ENV_VARS (CLAUDECODE, CLAUDE_CODE_SESSION_ID etc.), defaults CI=1 without overriding an explicit value, never mutates the source env object, and returns only variable names (never values) in its report. <sub>`packages/core/src/runtime/env.ts`</sub>
-- AgentSpec.tools === undefined means 'use claude's full default toolset'; an explicit empty array means 'no tools at all' — buildArgs() only emits --tools when spec.tools !== undefined, so omitting vs. passing [] are semantically different. <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
-- systemPromptOverride (--system-prompt) and systemPrompt (--append-system-prompt) are not mutually exclusive; override REPLACES the default prompt and must only be used for tool-less agents, never for agents with tools (would strip tool-use guidance). <sub>`packages/core/src/types.ts` [doc]</sub>
-- run() always yields a terminal event: if the child closes without ever emitting agent.done, run() synthesizes an agent.error so downstream consumers (collectAgent, UI) can rely on always seeing a terminal event. <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
-- Every spawned child is added to the module-level liveChildren Set and removed on 'error'/'close'; killAllAgents() is the backstop for process.exit() bypassing the async generator's finally block, so children can survive a cancelled Swarm OS process otherwise. <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
-- Unknown/unrecognized stream-json event types are silently ignored by translate() rather than throwing, so a claude CLI upgrade degrades gracefully instead of crashing agents. <sub>`packages/core/src/runtime/stream-json.ts`</sub>
-- applyUpdate() for a git install refuses to run if `git status --porcelain` is non-empty (any local modification is treated as work-in-progress and reported as blocked); it only fast-forwards via `git pull --ff-only`. <sub>`packages/core/src/update/index.ts`</sub>
-- backgroundUpdate() is meant to run in a detached background process; the foreground/CLI path should only ever read the cached update.json via readUpdateStatus(), never call checkForUpdate/applyUpdate synchronously, so commands are never slowed down. <sub>`packages/core/src/update/index.ts` [doc]</sub>
-- updatesDisabled() (SWARM_NO_UPDATE env var, any value other than '', '0', 'false') must be checked before any update check/apply path runs. <sub>`packages/core/src/update/index.ts`</sub>
-- index.ts's export lines are one-per-source-file re-export statements; removing a single named export from a line (rather than deleting the whole line) is a safe, surgical edit as long as the other names on that line are preserved verbatim. <sub>`packages/core/src/index.ts`</sub>
+- scrubEnv() never mutates the source env object (returns a shallow copy); its ScrubResult carries only removed variable *names*, never values — verified by a test that JSON-serializes the result and asserts secret values are absent. <sub>`packages/core/src/runtime/env.ts`</sub>
+- AgentSpec.tools === undefined means 'full default toolset'; AgentSpec.tools === [] means 'no tools at all' and forces the tool-less system tier. Load-bearing in buildArgs(). <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
+- systemPromptOverride (--system-prompt) and systemPrompt (--append-system-prompt) can both be passed at once; systemPromptOverride must only be used for agents with tools===[] since it discards the tool-use guidance the harness otherwise supplies. <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
+- run()'s finally block always attempts child.kill('SIGTERM') if the child is alive when the generator unwinds, but process.exit() from outside bypasses this — liveChildren + killAllAgents() is the documented backstop. <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
+- translate() never throws on unknown/malformed input — unknown event types and non-record shapes return an empty array — so a claude CLI upgrade with new event types degrades silently. <sub>`packages/core/src/runtime/stream-json.ts`</sub>
+- UsageSnapshot.contextTokens = inputTokens + cacheReadTokens + cacheCreationTokens, deliberately excluding outputTokens. <sub>`packages/core/src/runtime/stream-json.ts`</sub>
+- If the child process closes without ever emitting agent.done (crash, non-zero exit, clean exit with no result), run() synthesizes a terminal agent.error so consumers always see exactly one terminal event per run(). <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
+- applyUpdate() for a git install refuses to run if `git status --porcelain` is non-empty — reports blocked rather than fast-forwarding over uncommitted work. <sub>`packages/core/src/update/index.ts`</sub>
+- backgroundUpdate() is meant to run in a detached background process; the foreground CLI path only ever reads update.json via readUpdateStatus() and must never block on a network check. <sub>`packages/core/src/update/index.ts` [doc]</sub>
+- updatesDisabled() treats SWARM_NO_UPDATE as opted-out unless unset, '', '0', or 'false' — any other value disables updates. <sub>`packages/core/src/update/index.ts`</sub>
+- checkStaleBuild(repoRoot) compares newest mtime among src/**/*.ts (excluding *.test.ts) against tsconfig.tsbuildinfo mtime, per package (core, cli). NEVER compare against dist output mtimes — tsc --build refreshes tsbuildinfo but skips dist emit when touched files hash unchanged, so dist comparisons false-positive. Missing tsbuildinfo counts as stale. All filesystem errors are caught internally per-package and treated as not-stale — the function never throws. Must be skipped when SWARM_UPDATE_WORKER is set. Always returns `{ stale: boolean }`, never `null`, despite the nullable-looking return type (null reserved for a possible future 'undeterminable' signal, unused today). <sub>`packages/core/src/update/stale-build.ts`</sub>
 
 ## Gotchas
 
-- agentBaselineTokens() interpolates/extrapolates over only 3 measured anchor points (0, 3, 6 tools) taken on one specific Claude Code version (2.1.231); explicitly labelled an estimate since tool cost varies widely (e.g. Bash vs Glob). <sub>`packages/core/src/runtime/baseline.ts`</sub>
-- lean mode (default true unless spec.lean === false) forces --setting-sources to spec.settingSources ?? '' (no settings files at all) in addition to --strict-mcp-config and --disable-slash-commands; non-lean mode only sets --setting-sources if the caller explicitly passed one. <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
-- tryParseJson() has a lenient fallback: if strict JSON.parse fails it slices from the first '[' or '{' to the last ']' or '}' and retries — can silently 'succeed' on malformed/truncated text that happens to have matching outer brackets somewhere in the middle. <sub>`packages/core/src/runtime/stream-json.ts`</sub>
-- 'user' type stream-json events (synthetic tool-result turns) always produce agent.tool_result events with tool: '' — the tool name is not recoverable from that event shape, so consumers cannot correlate a result to which tool produced it via this field alone. <sub>`packages/core/src/runtime/stream-json.ts`</sub>
-- detectInstall() determines git-vs-npm by walking up from the running module's own file path for the nearest package.json (assumed to be @swarm-os/cli) and then further up for a .git directory — depends on the current monorepo layout (dist/ nested under a repo root with .git) and will misclassify if that layout changes. <sub>`packages/core/src/update/index.ts`</sub>
-- index.ts re-exports far more than this module owns (workspace, mapper, swarm, architecture, ui, mission, loop, git — all owned by sibling modules); it is the single flat @swarm-os/core barrel for the entire package, not scoped to runtime/update. Any edit here risks breaking every other module's public surface. <sub>`packages/core/src/index.ts`</sub>
-- In at least one session, Bash invocations of `npm test` / `npx tsc --noEmit` (even with dangerouslyDisableSandbox) were blocked with 'This command requires approval' and never approved — reports of "tests pass" for index.ts / barrel edits may be verified only by grep, not execution. Ask the user to pre-approve or run verification commands themselves before trusting such a report.
+- agentBaselineTokens() interpolates/extrapolates over just 3 measured anchor points (0, 3, 6 tools) on one Claude Code version (2.1.231); explicitly labelled an estimate, not a guaranteed bound. <sub>`packages/core/src/runtime/baseline.ts` [doc]</sub>
+- Lean mode's headline savings (~95k -> ~12k tokens) and the 8,746/28,925-token default-prompt figures in system-tier.ts are measurements from one specific CLI version and an empty/no-tool prompt; will drift as `claude` CLI changes, not re-verified at runtime. <sub>`packages/core/src/runtime/claude-code-local.ts` [doc]</sub>
+- index.ts is NOT scoped to this module — it's the single barrel for the whole @swarm-os/core package; most of its exports belong to sibling modules. Only the ./runtime/*, ./update/*, and ./types.js re-exports are this module's surface. <sub>`packages/core/src/index.ts`</sub>
+- 'user' events in the NDJSON stream are synthetic tool-result turns, not real end-user chat turns — translate() maps type==='user' to agent.tool_result. <sub>`packages/core/src/runtime/stream-json.ts`</sub>
+- detectInstall() finds git-vs-npm by walking up from the running module's file path to package.json then continuing up for a .git dir — a monorepo checkout without .git up the chain would misreport as 'npm'. <sub>`packages/core/src/update/index.ts`</sub>
+- detectBillingEnv() and scrubEnv() only cover the fixed BILLING_ENV_VARS/NESTING_ENV_VARS lists; a new Claude Code env var added in a future CLI version leaks through until these lists are updated by hand. <sub>`packages/core/src/runtime/env.ts`</sub>
+- preflight()'s billing-basis check only treats authMethod==='claude.ai' as 'subscription'; every other authMethod is reported 'warn' (bills per token). <sub>`packages/core/src/runtime/claude-code-local.ts`</sub>
+- The result event's `structured` field parses raw['result'] as JSON only when raw['structured_output'] is absent — if the CLI ever sends both, structured_output silently wins even if stale/wrong (asserted by a test). <sub>`packages/core/src/runtime/stream-json.ts`</sub>
+- checkStaleBuild's tsbuildinfo path is hardcoded as `<packageRoot>/tsconfig.tsbuildinfo` (next to tsconfig.json, not inside dist/), derived from TS's default tsBuildInfoFile computation for this repo's current tsconfig layout (rootDir ./src, outDir ./dist, no explicit tsBuildInfoFile) — not observed from an actual build run. If either package's tsconfig rootDir/outDir/tsBuildInfoFile setup ever changes, this silently starts reporting perpetual false staleness with nothing to catch the drift. <sub>`packages/core/src/update/stale-build.ts`</sub>
 
 ## Landmarks
 
-- `packages/core/src/types.ts` — Domain vocabulary + AgentRuntime port interface that all runtime implementations (present and future, e.g. a ClaudeApiRuntime) must satisfy.
-- `packages/core/src/runtime/claude-code-local.ts` — ClaudeCodeLocalRuntime class: buildArgs(), run() async generator over child_process, killAllAgents()/liveChildren registry, preflight() (version+auth+billing checks).
-- `packages/core/src/runtime/stream-json.ts` — NdjsonBuffer (line splitter) + translate() (raw JSON -> SwarmEvent[]) + tryParseJson() (fenced/loose JSON extraction).
-- `packages/core/src/runtime/env.ts` — BILLING_ENV_VARS / NESTING_ENV_VARS constant lists + scrubEnv()/detectBillingEnv().
-- `packages/core/src/runtime/collect.ts` — collectAgent() drains an AgentRuntime.run() stream into a single AgentOutcome; sumUsage() aggregates UsageSnapshots for mission ledgers.
-- `packages/core/src/runtime/system-tier.ts` — standaloneSystemPrompt() (no-tools agents) and standaloneAgentPrompt() (tool-bearing agents) — both replace rather than append to Claude Code's default system prompt, for token savings.
-- `packages/core/src/runtime/baseline.ts` — agentBaselineTokens(toolCount) interpolation/extrapolation over 3 measured anchors; CONTEXT_WINDOW=200_000 constant.
-- `packages/core/src/update/index.ts` — Self-update: detectInstall(), checkForUpdate(), applyUpdate(), backgroundUpdate() (detached check+apply), status cache under ~/.swarm/update.json.
-- `packages/core/src/index.ts` — Flat barrel export for all of @swarm-os/core — types, runtime, update, plus every sibling module's public surface (workspace, mapper, swarm, architecture, ui, mission, loop, git). No longer re-exports SPLIT_AT from swarm/areas.ts (removed as dead export, 2026-08-17); still re-exports detectAreas, areaAsModule, planAreas, renderAreaIndex from './swarm/areas.js'.
+- `packages/core/src/runtime/claude-code-local.ts` — AgentRuntime implementation: buildArgs(), run() (spawn + async generator over SwarmEvents), liveChildren registry, killAllAgents(), preflight()/authStatus()/version().
+- `packages/core/src/runtime/stream-json.ts` — NdjsonBuffer (chunk reassembly), translate() (raw JSON -> SwarmEvent[]), tryParseJson() (fenced/embedded JSON recovery for structured output fallback).
+- `packages/core/src/runtime/env.ts` — scrubEnv()/detectBillingEnv(), BILLING_ENV_VARS, NESTING_ENV_VARS lists — the sole defence against agents silently billing per-token instead of via subscription.
+- `packages/core/src/runtime/collect.ts` — collectAgent() drains an AgentRuntime.run() async iterable into a single AgentOutcome; sumUsage() aggregates UsageSnapshots for mission ledgers.
+- `packages/core/src/runtime/system-tier.ts` — standaloneSystemPrompt() (tool-less agents) and standaloneAgentPrompt() (narrow tool sets) — both replace Claude Code's ~8.5k-token default system prompt with a smaller charter.
+- `packages/core/src/runtime/baseline.ts` — agentBaselineTokens(toolCount) — interpolated/extrapolated estimate of fixed per-agent context cost, 3 anchor points, Claude Code 2.1.231.
+- `packages/core/src/update/index.ts` — Self-update: detectInstall (git vs npm), checkForUpdate, applyUpdate, backgroundUpdate (detached, writes update.json under ~/.swarm), isCheckDue/updatesDisabled/CHECK_INTERVAL_MS gating.
+- `packages/core/src/update/stale-build.ts` — checkStaleBuild(repoRoot) — mtime-only check per package (core, cli) of newest src .ts file vs tsconfig.tsbuildinfo; used by the CLI to warn about a git install whose local build is stale relative to committed source. Never throws.
+- `packages/core/src/types.ts` — All shared domain types: ModuleSpec, SwarmRecord/SwarmState, MissionRecord/MissionStatus/MissionPlan/MissionAssignment, AgentSpec/PermissionMode, UsageSnapshot, RateLimitSnapshot, SwarmEvent (discriminated union), PreflightReport/PreflightCheck, AgentRuntime interface.
+- `packages/core/src/index.ts` — Flat barrel export for the entire @swarm-os/core package across all sibling modules, not scoped to runtime/update.
 
 ## Public interface
 
-- AgentRuntime, AgentSpec, SwarmEvent, ModuleSpec, SwarmRecord, MissionRecord, AgentLedgerEntry, MissionPlan/MissionAssignment, UsageSnapshot, RateLimitSnapshot, PreflightReport/PreflightCheck, PermissionMode (types.ts)
-- ClaudeCodeLocalRuntime, ClaudeCodeLocalOptions, AuthStatus, killAllAgents (runtime/claude-code-local.ts) — killAllAgents is called directly by packages/cli/src/main.ts on signal/abrupt-exit handling
-- collectAgent, sumUsage, AgentOutcome (runtime/collect.ts)
-- scrubEnv, detectBillingEnv, BILLING_ENV_VARS, NESTING_ENV_VARS (runtime/env.ts)
-- NdjsonBuffer, translate, tryParseJson (runtime/stream-json.ts)
-- standaloneSystemPrompt, standaloneAgentPrompt (runtime/system-tier.ts)
-- agentBaselineTokens, CONTEXT_WINDOW (runtime/baseline.ts)
-- detectInstall, checkForUpdate, applyUpdate, backgroundUpdate, readUpdateStatus, writeUpdateStatus, isCheckDue, updatesDisabled, stateDir, CHECK_INTERVAL_MS, InstallInfo, InstallKind, UpdateStatus, ApplyResult (update/index.ts) — consumed by packages/cli/src/commands/update.ts
-- index.ts as the sole @swarm-os/core package entry point (main/types fields in package.json point at dist/index.js)
+- ClaudeCodeLocalRuntime (implements AgentRuntime), killAllAgents(), ClaudeCodeLocalOptions, AuthStatus
+- collectAgent(), sumUsage(), AgentOutcome
+- scrubEnv(), detectBillingEnv(), BILLING_ENV_VARS, NESTING_ENV_VARS
+- NdjsonBuffer, translate(), tryParseJson(), TranslateContext
+- standaloneSystemPrompt(), standaloneAgentPrompt()
+- agentBaselineTokens(), CONTEXT_WINDOW
+- detectInstall(), checkForUpdate(), applyUpdate(), backgroundUpdate(), readUpdateStatus(), writeUpdateStatus(), isCheckDue(), updatesDisabled(), stateDir(), CHECK_INTERVAL_MS, InstallInfo, InstallKind, UpdateStatus, ApplyResult
+- checkStaleBuild(repoRoot) — returns `{ stale: boolean }`
+- All domain types from types.ts: ModuleSpec, SwarmRecord, SwarmState, MissionRecord, MissionStatus, AgentLedgerEntry, MissionPlan, MissionAssignment, PermissionMode, AgentSpec, UsageSnapshot, RateLimitSnapshot, SwarmEvent, PreflightReport, PreflightCheck, AgentRuntime
 
 ---
 
-_Surveyed 2026-08-15 by the `runtime` analyst, reading only this module's paths. Updated 2026-08-17: index.ts edited to drop SPLIT_AT re-export (companion change lives in swarm module's areas.ts)._
+_Last touched 2026-08-21: added checkStaleBuild() (packages/core/src/update/stale-build.ts) plus tests, wired into barrel. Not yet run through `npm test`/`npm run build` — sandbox blocked all process-execution commands that mission; verify test suite passes before relying further on this._

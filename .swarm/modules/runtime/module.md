@@ -1,6 +1,6 @@
 # Agent Runtime Port
 
-Defines the AgentRuntime port (types.ts: ModuleSpec/SwarmRecord/MissionRecord/AgentSpec/SwarmEvent/AgentRuntime interface) and its sole implementation, ClaudeCodeLocalRuntime — a subprocess wrapper around the local `claude` CLI's `--output-format stream-json` NDJSON protocol, translated into a normalized SwarmEvent stream. Also owns: environment scrubbing (billing/nesting env vars stripped from spawned agents), tool-less "system tier" prompt construction with measured token savings, empirically-anchored per-agent context baseline estimates, and self-update detection/check/apply for the Swarm OS binary itself (git fast-forward or npm install -g). index.ts is the single flat barrel export for the entire @swarm-os/core package, not scoped to this module alone.
+Defines the AgentRuntime port and normalized domain vocabulary for Swarm OS (types.ts: ModuleSpec, SwarmRecord, MissionRecord, AgentSpec, SwarmEvent, AgentRuntime), and implements the sole runtime adapter today — ClaudeCodeLocalRuntime, a subprocess wrapper around the local `claude` CLI's `--output-format stream-json` NDJSON protocol, translated into a normalized SwarmEvent stream. Also owns environment scrubbing to protect subscription billing, tool-less "system tier" prompt construction, empirically-anchored per-agent context-window baseline estimates, and self-update detection/check/apply for the Swarm OS binary itself. index.ts is the single flat barrel re-exporting the entire @swarm-os/core package (not just this module) — its own contribution is lines 1-42.
 
 ## Owns
 
@@ -13,12 +13,12 @@ Defines the AgentRuntime port (types.ts: ModuleSpec/SwarmRecord/MissionRecord/Ag
 
 ## Read first
 
-- `packages/core/src/types.ts` — Defines the AgentRuntime port interface (preflight/run) and every domain type (AgentSpec, SwarmEvent, ModuleSpec, MissionRecord, UsageSnapshot) that the rest of the package depends on.
-- `packages/core/src/runtime/claude-code-local.ts` — The only AgentRuntime implementation: buildArgs() maps AgentSpec to claude CLI flags, run() is the async-generator subprocess driver, killAllAgents()/liveChildren is the process-leak backstop.
-- `packages/core/src/runtime/stream-json.ts` — translate() converts raw claude CLI NDJSON objects into SwarmEvent[]; NdjsonBuffer handles partial-chunk line splitting; tryParseJson() is the structured-output fallback parser.
-- `packages/core/src/runtime/env.ts` — scrubEnv()/detectBillingEnv() and the BILLING_ENV_VARS/NESTING_ENV_VARS lists — the single mechanism preventing agents from silently billing per-token.
-- `packages/core/src/update/index.ts` — Self-update: detectInstall() (git vs npm), checkForUpdate(), applyUpdate(), backgroundUpdate() — all state cached under ~/.swarm/update.json.
-- `packages/core/src/index.ts` — The single package entry point; shows what this module exports alongside every sibling module's surface.
+- `packages/core/src/types.ts` — Defines the whole domain vocabulary (Module/Swarm/Mission/Agent) and the AgentRuntime port interface every other module depends on transitively.
+- `packages/core/src/runtime/claude-code-local.ts` — The only AgentRuntime implementation; buildArgs() shows exactly which claude CLI flags encode each AgentSpec field, and run() shows the subprocess/async-generator lifecycle.
+- `packages/core/src/runtime/stream-json.ts` — translate() is the sole place raw claude CLI NDJSON becomes SwarmEvent; a silent bug here makes agents 'appear to do nothing' per its own test file's comment.
+- `packages/core/src/runtime/env.ts` — The billing-safety mechanism (scrubEnv/BILLING_ENV_VARS/NESTING_ENV_VARS) that every spawned agent goes through.
+- `packages/core/src/update/index.ts` — Self-update logic (detectInstall/checkForUpdate/applyUpdate/backgroundUpdate) consumed by the CLI's update scheduling.
+- `packages/core/src/index.ts` — Barrel file; shows what the whole @swarm-os/core package exposes, including everything from sibling modules — useful to see the full public surface this module contributes to.
 
 ## Depends on
 

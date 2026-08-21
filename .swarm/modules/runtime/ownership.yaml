@@ -2,17 +2,17 @@
 # diffs are checked against them after every mission.
 
 name: Agent Runtime Port
-purpose: "Defines the AgentRuntime port (types.ts:
-  ModuleSpec/SwarmRecord/MissionRecord/AgentSpec/SwarmEvent/AgentRuntime
-  interface) and its sole implementation, ClaudeCodeLocalRuntime — a subprocess
-  wrapper around the local `claude` CLI's `--output-format stream-json` NDJSON
-  protocol, translated into a normalized SwarmEvent stream. Also owns:
-  environment scrubbing (billing/nesting env vars stripped from spawned agents),
-  tool-less \"system tier\" prompt construction with measured token savings,
-  empirically-anchored per-agent context baseline estimates, and self-update
-  detection/check/apply for the Swarm OS binary itself (git fast-forward or npm
-  install -g). index.ts is the single flat barrel export for the entire
-  @swarm-os/core package, not scoped to this module alone."
+purpose: "Defines the AgentRuntime port and normalized domain vocabulary for
+  Swarm OS (types.ts: ModuleSpec, SwarmRecord, MissionRecord, AgentSpec,
+  SwarmEvent, AgentRuntime), and implements the sole runtime adapter today —
+  ClaudeCodeLocalRuntime, a subprocess wrapper around the local `claude` CLI's
+  `--output-format stream-json` NDJSON protocol, translated into a normalized
+  SwarmEvent stream. Also owns environment scrubbing to protect subscription
+  billing, tool-less \"system tier\" prompt construction, empirically-anchored
+  per-agent context-window baseline estimates, and self-update
+  detection/check/apply for the Swarm OS binary itself. index.ts is the single
+  flat barrel re-exporting the entire @swarm-os/core package (not just this
+  module) — its own contribution is lines 1-42."
 owns:
   - packages/core/src/runtime/**
   - packages/core/src/update/**

@@ -4,46 +4,47 @@ _Durable knowledge for the `workspace-git` swarm. Read on wake, rewritten on sle
 
 ## Invariants
 
-- StateFile (.swarm/state.json) must be read and written whole, preserving unknown fields — readState spreads the raw parsed object rather than rebuilding from known keys, because an earlier version that rebuilt it silently dropped digestHash/moduleHashes and broke incremental re-mapping. <sub>`packages/core/src/workspace/store.ts`</sub>
-- resetMissionLog() must be called before a mission starts writing events.jsonl, because mission ids are derived from the goal so re-running the same goal reuses the same directory; without clearing it, the log interleaves events from two different runs. <sub>`packages/core/src/workspace/store.ts`</sub>
-- archiveModulesNotIn moves (not deletes) module directories dropped by a repartition, into .swarm/archive/<label>/, to preserve accumulated memory; listModules() would otherwise return stale slugs alongside new ones and corrupt ownership resolution. <sub>`packages/core/src/workspace/store.ts`</sub>
-- memory.md and decisions.md are seeded only if absent (writeModule never overwrites them) — swarm map must never regenerate accumulated memory from scratch. <sub>`packages/core/src/workspace/store.ts`</sub>
-- parseConfig always forces version:1 regardless of what's in the file, and unknown/malformed YAML falls back to DEFAULT_CONFIG entirely rather than partially — config.yaml is committed and must be forward/backward tolerant across Swarm OS versions. <sub>`packages/core/src/workspace/config.ts`</sub>
-- DEFAULT_CONFIG.worktreeLinks deliberately excludes anything that could hold secrets (e.g. .env); only dependency directories (node_modules, .venv, vendor, target, .gradle) are symlinked into agent worktrees by default. <sub>`packages/core/src/workspace/config.ts`</sub>
-- Linked dependency symlinks (from linkDependencies) must be excluded from commitAll and changedFiles via the `linked` parameter — a trailing-slash gitignore pattern like `node_modules/` does not match a symlink of that name, so without explicit exclusion every mission would report/commit an absolute machine-local path. <sub>`packages/core/src/git/worktree.ts`</sub>
-- commitAll must exclude linked paths by staging everything then `git rm --cached` on the linked names, NOT via an `:(exclude)` pathspec — naming an explicit pathspec makes `git add` fail outright when the path is gitignored, which silently produced 'nothing committed' missions. <sub>`packages/core/src/git/worktree.ts`</sub>
-- isWorkingTreeCleanIgnoringSwarm treats any status line whose path starts with '.swarm/' as clean; used by `swarm loop`'s pre-flight so the tool's own bookkeeping never blocks or is blamed for dirtying the tree. <sub>`packages/core/src/git/worktree.ts`</sub>
-- ensureSwarmIgnore fully rewrites .swarm/.gitignore on every call rather than merging with an existing one — an older/narrower version already committed is exactly the failure mode it fixes. <sub>`packages/core/src/git/worktree.ts`</sub>
+- StateFile (.swarm/state.json) must be read and written whole, never rebuilt from a subset of known keys — an earlier bug that reconstructed it from `swarms`/`mappedAt` silently dropped `digestHash`/`moduleHashes`, breaking incremental re-mapping. readState spreads the raw parsed object before overriding `swarms`. <sub>`packages/core/src/workspace/store.ts`</sub>
+- writeModule() only seeds memory.md/decisions.md if they don't already exist (existsSync guard) — `swarm map` must never regenerate/overwrite accumulated memory, only ownership.yaml and module.md are always rewritten. <sub>`packages/core/src/workspace/store.ts`</sub>
+- archiveModulesNotIn moves (never deletes) stale module directories to .swarm/archive/<label>/ to preserve memory when repartitioning changes the slug set; a rename collision (same-day re-partition) is handled by force-removing the old archive target first. <sub>`packages/core/src/workspace/store.ts`</sub>
+- resetMissionLog must be called before a mission starts to truncate events.jsonl to empty — mission ids are derived from the goal so re-running the same goal reuses the same directory, and an un-reset log would interleave events from two separate runs. <sub>`packages/core/src/workspace/store.ts`</sub>
+- isWorkingTreeCleanIgnoringSwarm treats ONLY paths under `.swarm/` (tracked or untracked) as non-dirty; any other untracked or modified file still fails the check. Used by `swarm loop` so the tool's own bookkeeping writes never self-block the next iteration. <sub>`packages/core/src/git/worktree.ts`</sub>
+- commitAll/changedFiles/diffStat/fullDiff all hide two things unconditionally: names in the `linked` argument (dependency symlinks like node_modules/.venv) and the literal `.swarm` directory — via hiddenFromWork(linked) = [...linked, '.swarm']. `.swarm/` edits an agent makes during a mission must never ride the work branch, because the memory compressor rewrites those same files on the main checkout at mission end. <sub>`packages/core/src/git/worktree.ts`</sub>
+- commitAll stages with a two-step add-then-unstage (`git add -A` then `git rm --cached --ignore-unmatch` per hidden name), not an `:(exclude)` pathspec — naming an explicit pathspec makes `git add` FAIL outright on ignored paths instead of skipping them, which previously caused missions to report success with nothing committed once a repo's .gitignore caught the linked symlink name. <sub>`packages/core/src/git/worktree.ts`</sub>
+- linkDependencies creates symlinks (not copies) pointing at the repo root's existing node_modules/.venv/etc; missing sources are skipped silently (not an error) and existing targets are skipped (idempotent reuse of an existing worktree). <sub>`packages/core/src/git/worktree.ts`</sub>
+- createWorktree reuses an existing worktree at the same path (checked via presence of `<path>/.git`) without re-running `git worktree add`, and reuses an existing branch name (`rev-parse --verify`) rather than erroring if it's already there. <sub>`packages/core/src/git/worktree.ts`</sub>
+- config.yaml is committed to the target repo by design, must never contain credentials or machine-specific paths, and parseConfig always forces `version: 1` on read regardless of the stored value — unknown/malformed YAML silently falls back to DEFAULT_CONFIG rather than throwing. <sub>`packages/core/src/workspace/config.ts`</sub>
 
 ## Gotchas
 
 - ensureWorktreeIgnore is a deprecated alias for ensureSwarmIgnore, kept only for compatibility — new code should call ensureSwarmIgnore directly. <sub>`packages/core/src/git/worktree.ts`</sub>
-- createWorktree reuses an existing worktree at the target path (detected via a .git file inside it) without checking the branch matches; it just re-links dependencies and returns created:false. Callers relying on a specific branch should verify it themselves. <sub>`packages/core/src/git/worktree.ts`</sub>
-- fullDiff runs `git add -AN` (intent-to-add) first as a side effect so untracked new files show up in the diff — this mutates the worktree's index state even though the function looks read-only. <sub>`packages/core/src/git/worktree.ts`</sub>
-- Workspace.find() walks up parent directories looking for .swarm/config.yaml specifically (not just a .swarm/ dir) to decide a workspace exists at that root. <sub>`packages/core/src/workspace/store.ts`</sub>
-- swarmRecord() only includes memoryAreas when listAreas() returns a non-empty list; modules with a single unsplit memory.md get no memoryAreas key at all (not an empty array) — callers must check for its presence, not just length. <sub>`packages/core/src/workspace/store.ts`</sub>
-- .swarm/config.yaml, system.md and the modules/ tree are meant to be committed (shared knowledge); everything else under .swarm/ (worktrees, missions/, state.json, loop.log/json, view.html, REFACTOR.md, archive/) is written to .swarm/.gitignore by ensureSwarmIgnore and must stay per-machine/per-run. <sub>`packages/core/src/git/worktree.ts`</sub>
+- ensureSwarmIgnore fully overwrites .swarm/.gitignore on every call (not merged/appended) — an intentionally destructive rewrite so a stale, narrower version left by an older Swarm OS build can't linger. <sub>`packages/core/src/git/worktree.ts`</sub>
+- isLinkedPath/hiddenFromWork compare by exact top-level name or `name + '/'` prefix against the string list passed in from linkDependencies' return value — it does not re-scan the filesystem for symlinks, so a caller that fails to pass the same `linked` list used at worktree-creation time will leak dependency paths into diffs/commits. <sub>`packages/core/src/git/worktree.ts`</sub>
+- fullDiff runs `git add -AN` (intent-to-add) as a side effect before diffing, purely so untracked new files show up in the diff output — this mutates the worktree's index (stages an empty blob for new files) even though the function name suggests a read-only operation. <sub>`packages/core/src/git/worktree.ts`</sub>
+- git() never throws — failures are swallowed into `{ok: false, stdout, stderr}`; every caller in this file must check `.ok` explicitly (several functions like isWorkingTreeClean/diffStat silently fall back to false/'' on failure via `res.ok ? ... : fallback`). <sub>`packages/core/src/git/worktree.ts`</sub>
+- Workspace.find() walks up parent directories looking for `.swarm/config.yaml` specifically (not just a `.swarm/` dir) — a `.swarm/` directory without config.yaml (e.g. mid-init) will not be found as an existing workspace. <sub>`packages/core/src/workspace/store.ts`</sub>
+- swarmRecord() returns memoryAreas only when listAreas() is non-empty; callers must treat memoryAreas as absent (not empty array) to mean 'memory is not split' — checking `.length === 0` on a possibly-undefined field is a likely bug spot. <sub>`packages/core/src/workspace/store.ts`</sub>
 
 ## Landmarks
 
-- `packages/core/src/workspace/store.ts` — Workspace class: config, system.md, per-module files (module.md/memory.md/decisions.md/verification.md/conventions.md), per-module 'areas' for split memory, state.json (swarm records), mission records + event logs, and archiving of stale module dirs.
-- `packages/core/src/workspace/config.ts` — SwarmConfig type + DEFAULT_CONFIG + parseConfig/serializeConfig for .swarm/config.yaml, which is committed to the target repo.
-- `packages/core/src/git/worktree.ts` — git() exec wrapper, isWorkingTreeClean(IgnoringSwarm), createWorktree/removeWorktree/pruneWorktrees, linkDependencies (symlinks node_modules etc into worktrees), changedFiles/diffStat/fullDiff, commitAll, ensureSwarmIgnore (writes .swarm/.gitignore).
-- `packages/core/src/git/clean-tree.test.ts` — Regression tests pinning down exactly what isWorkingTreeCleanIgnoringSwarm must and must not ignore — read before touching that function.
-- `packages/core/src/git/linked-paths.test.ts` — Regression tests for why symlinked dependency dirs must be excluded from both commitAll and changedFiles, including the pathspec-exclude bug this codebase hit and avoided.
+- `packages/core/src/workspace/store.ts` — Workspace class: config, system.md, per-module (ownership.yaml/module.md/memory.md/decisions.md), per-area memory, state.json, mission records + events.jsonl. ~470 lines, exhaustive.
+- `packages/core/src/workspace/config.ts` — SwarmConfig interface + DEFAULT_CONFIG + parseConfig/serializeConfig. Committed to the target repo at .swarm/config.yaml.
+- `packages/core/src/git/worktree.ts` — git() exec wrapper, isGitRepo/currentBranch/isWorkingTreeClean(IgnoringSwarm), ensureSwarmIgnore (writes .swarm/.gitignore), linkDependencies, createWorktree/removeWorktree/pruneWorktrees, changedFiles/diffStat/fullDiff/commitAll.
+- `packages/core/src/git/clean-tree.test.ts` — Regression tests proving the loop's clean-tree check ignores .swarm/ churn but still blocks on real user changes.
+- `packages/core/src/git/linked-paths.test.ts` — Regression tests proving linked dependency symlinks and .swarm/ are invisible to changedFiles/fullDiff/diffStat/commitAll, including the gitignored-symlink edge case.
+- `packages/core/src/index.ts` — Barrel re-export (lines ~45-48, ~126-142) — confirms exactly which store/config/git symbols are the module's real public interface.
 
 ## Public interface
 
-- Workspace class (find, exists, readConfig/writeConfig, readSystem/writeSystem, readSystemFile/writeSystemFile, moduleDir/listModules/readModule/writeModule/archiveModulesNotIn, readModuleFile/writeModuleFile, areaDir/listAreas/readAreaFile/writeAreaFile/pruneAreas, appendDecision, readState/writeState/updateSwarm/swarmRecord, missionDir/writeMission/resetMissionLog/readMission/listMissions/writeMissionFile/logEvent/removeMission, rel)
-- SWARM_DIR, estimateTokens
+- Workspace class (find, exists, readConfig/writeConfig, readSystem/writeSystem, readSystemFile/writeSystemFile, moduleDir/listModules/readModule/writeModule, archiveModulesNotIn, readModuleFile/writeModuleFile, areaDir/listAreas/readAreaFile/writeAreaFile/pruneAreas, appendDecision, readState/writeState/updateSwarm/swarmRecord, missionDir/writeMission/resetMissionLog/readMission/listMissions/writeMissionFile/logEvent/removeMission, rel)
+- SWARM_DIR, estimateTokens constants/fns
 - ModuleFile, StateFile, MemoryArea types
 - SwarmConfig type, DEFAULT_CONFIG, parseConfig, serializeConfig
-- git(), isGitRepo, currentBranch, isWorkingTreeClean, isWorkingTreeCleanIgnoringSwarm
-- createWorktree, removeWorktree, pruneWorktrees, WorktreeHandle type
-- linkDependencies, ensureSwarmIgnore (+ deprecated ensureWorktreeIgnore alias)
+- git(), isGitRepo, currentBranch, isWorkingTreeClean, isWorkingTreeCleanIgnoringSwarm, ensureSwarmIgnore
+- createWorktree, linkDependencies, removeWorktree, pruneWorktrees, WorktreeHandle type
 - changedFiles, diffStat, fullDiff, commitAll
-- all re-exported wholesale from packages/core/src/index.ts
+- All re-exported flat from packages/core/src/index.ts (the @swarm-os/core barrel), consumed by mission/run.ts, mapper/pipeline.ts, ui/snapshot.ts, swarm/manager.ts, swarm/memory-state.ts, swarm/finalize-sleep.ts, swarm/file-area-sections.ts, swarm/verify.ts, loop/run.ts
 
 ---
 
-_Surveyed 2026-08-15 by the `workspace-git` analyst, reading only this module's paths._
+_Surveyed 2026-08-21 by the `workspace-git` analyst, reading only this module's paths._

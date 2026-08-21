@@ -2,14 +2,15 @@
 # diffs are checked against them after every mission.
 
 name: Workspace & Git Worktrees
-purpose: Durable on-disk store (`workspace/`) for everything Swarm OS knows
-  about a target repo under its `.swarm/` directory (config, module
-  map/ownership, per-module memory/decisions/areas, swarm state, mission
-  records/event logs), plus a git CLI wrapper and worktree lifecycle manager
-  (`git/`) that gives each agent an isolated checkout under `.swarm/worktrees/`
-  so parallel swarms never collide on the index or working tree, and provides
-  the primitives (diff, commit, clean-tree check) that missions and the
-  unattended loop are built on.
+purpose: "Two tightly-scoped pieces read together: (1) workspace/store.ts +
+  config.ts define the on-disk schema and typed read/write API for a target
+  repo's `.swarm/` directory (config, module map/ownership, per-module
+  memory/decisions/areas, swarm state.json, mission records + append-only event
+  logs); (2) git/worktree.ts is a thin execFile wrapper around the `git` CLI
+  plus a worktree lifecycle (create/reuse/remove/prune), dependency-symlinking
+  so worktrees are buildable, and the diff/commit primitives (changedFiles,
+  diffStat, fullDiff, commitAll) that always hide both linked dependency
+  symlinks and `.swarm/` itself from what a mission can see or commit."
 owns:
   - packages/core/src/workspace/**
   - packages/core/src/git/**
@@ -18,12 +19,5 @@ entryPoints:
   - packages/core/src/workspace/config.ts
   - packages/core/src/git/worktree.ts
 dependsOn:
-  - mission (run.ts drives Workspace + worktree.ts to orchestrate a mission
-    end-to-end)
-  - swarm-orchestration (manager.ts, finalize-sleep.ts, memory-state.ts,
-    verify.ts consume Workspace heavily for module/state/memory)
-  - mapper (pipeline/* uses Workspace extensively for module map read/write,
-    areas, archiving)
-  - ui-observability (snapshot.ts reads Workspace to build the dashboard
-    snapshot)
+  - runtime
 fileCount: 6
