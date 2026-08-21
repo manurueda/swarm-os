@@ -369,6 +369,13 @@ export interface CommitSplit {
  * `linked` (e.g. `['node_modules']`) and `.swarm/` are excluded from both
  * commits exactly as before — they are filtered out before classification,
  * so neither ever reaches either commit.
+ *
+ * The index is reset to `HEAD` before anything is classified. A work agent
+ * may have run `git add` by hand before this ever runs — historically a
+ * linked `.venv` symlink — and `commitStaged` commits whatever the index
+ * holds, not just what this function staged. Resetting first means this
+ * function is the sole author of what each commit contains; nothing staged
+ * outside it can ride along.
  */
 export async function commitAll(
   worktreePath: string,
@@ -377,7 +384,10 @@ export async function commitAll(
   message: string,
   linked: string[] = [],
 ): Promise<CommitSplit> {
-  const status = await git(worktreePath, ['status', '--porcelain']);
+  const reset = await git(worktreePath, ['reset', '-q', 'HEAD']);
+  if (!reset.ok) throw new Error(reset.stderr.trim());
+
+  const status = await git(worktreePath, ['status', '--porcelain', '-uall']);
   if (!status.ok) throw new Error(status.stderr.trim());
 
   const hidden = hiddenFromWork(linked);

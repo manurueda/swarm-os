@@ -40,6 +40,7 @@ import {
   diffStat,
   fullDiff,
   isGitRepo,
+  type CommitSplit,
 } from '../git/worktree.js';
 import { renderPlan, routeMission } from './route.js';
 import { buildDigest } from '../mapper/digest.js';
@@ -535,9 +536,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
           `${spec.slug}: ${workReport?.summary?.split('\n')[0] ?? goal}`.slice(0, 100),
           linked,
         );
-        committed = Boolean(commit.mainCommitHash ?? commit.quarantineCommitHash);
-        quarantinedPaths = commit.quarantinedPaths;
-        quarantineCommitHash = commit.quarantineCommitHash;
+        ({ committed, quarantinedPaths, quarantineCommitHash } = applyCommitSplit(commit));
       } catch (err) {
         // A commit that fails silently is the worst outcome available: the work
         // exists, the branch is announced as ready, and there is nothing on it.
@@ -720,6 +719,24 @@ function parseWorkReport(raw: unknown): WorkReport | undefined {
   };
 }
 
+/**
+ * Maps a commit's split-by-ownership outcome onto the fields
+ * {@link MissionModuleResult} reports back to the mission. Pulled out of the
+ * commit step so the mapping — in particular that "committed" means either
+ * commit landed, not just the main one — is testable without a real repo.
+ */
+export function applyCommitSplit(commit: CommitSplit): {
+  committed: boolean;
+  quarantinedPaths: string[];
+  quarantineCommitHash?: string;
+} {
+  return {
+    committed: Boolean(commit.mainCommitHash ?? commit.quarantineCommitHash),
+    quarantinedPaths: commit.quarantinedPaths,
+    quarantineCommitHash: commit.quarantineCommitHash,
+  };
+}
+
 function firstParagraphs(system: string): string {
   const stop = system.split('\n').findIndex((l) => /^##\s+Modules/i.test(l));
   const lines = system.split('\n');
@@ -754,7 +771,7 @@ function renderModuleReport(goal: string, result: MissionModuleResult): string {
   ].join('\n');
 }
 
-function renderMissionReport(
+export function renderMissionReport(
   goal: string,
   plan: MissionPlan | undefined,
   results: MissionModuleResult[],

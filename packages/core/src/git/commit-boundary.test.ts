@@ -150,3 +150,68 @@ test('linked paths stay uncommitted in both the main and the quarantine commit',
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('a linked path staged by hand before commitAll lands in neither commit, and an out-of-bounds file staged by hand still lands only in quarantine', async () => {
+  const root = await initRepo();
+  try {
+    await mkdir(join(root, 'node_modules'));
+    await writeFile(join(root, 'node_modules', 'stray.js'), 'noise\n');
+    await writeFile(join(root, 'mine', 'a.ts'), 'export const a = 2;\n');
+    await writeFile(join(root, 'theirs', 'b.ts'), 'export const b = 2;\n');
+
+    // Simulate a work agent that already ran `git add` on both before commitAll runs.
+    await git(root, ['add', 'node_modules/stray.js', 'theirs/b.ts']);
+
+    const result = await commitAll(root, 'my-module', ['mine/**'], 'update a.ts', ['node_modules']);
+
+    assert.ok(result.mainCommitHash);
+    assert.ok(result.quarantineCommitHash);
+    assert.deepEqual(result.quarantinedPaths, ['theirs/b.ts']);
+
+    const mainShow = await git(root, ['show', '--name-only', '--format=', result.mainCommitHash as string]);
+    const quarantineShow = await git(root, [
+      'show', '--name-only', '--format=', result.quarantineCommitHash as string,
+    ]);
+    assert.match(mainShow.stdout, /mine\/a\.ts/);
+    assert.doesNotMatch(mainShow.stdout, /node_modules/);
+    assert.doesNotMatch(quarantineShow.stdout, /node_modules/);
+    assert.match(quarantineShow.stdout, /theirs\/b\.ts/);
+
+    const status = await git(root, ['status', '--porcelain']);
+    assert.match(status.stdout, /node_modules/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a new untracked directory with both owned and out-of-bounds files is split file-by-file, not collapsed to the directory', async () => {
+  const root = await initRepo();
+  try {
+    await mkdir(join(root, 'mine', 'sub'));
+    await writeFile(join(root, 'mine', 'sub', 'owned.ts'), 'export const owned = 1;\n');
+    await writeFile(join(root, 'mine', 'sub', 'stray.ts'), 'export const stray = 1;\n');
+
+    const result = await commitAll(
+      root,
+      'my-module',
+      ['mine/sub/owned.ts'],
+      'add sub files',
+    );
+
+    assert.ok(result.mainCommitHash);
+    assert.ok(result.quarantineCommitHash);
+    assert.deepEqual(result.quarantinedPaths, ['mine/sub/stray.ts']);
+
+    const mainShow = await git(root, ['show', '--name-only', '--format=', result.mainCommitHash as string]);
+    assert.match(mainShow.stdout, /mine\/sub\/owned\.ts/);
+    assert.doesNotMatch(mainShow.stdout, /mine\/sub\/stray\.ts/);
+
+    const quarantineShow = await git(root, [
+      'show', '--name-only', '--format=', result.quarantineCommitHash as string,
+    ]);
+    assert.match(quarantineShow.stdout, /mine\/sub\/stray\.ts/);
+    assert.doesNotMatch(quarantineShow.stdout, /mine\/sub\/owned\.ts/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

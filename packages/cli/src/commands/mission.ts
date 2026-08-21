@@ -67,19 +67,33 @@ export function formatRefusals(n: number): string {
   return n > 0 ? c.red(`${symbols.warn} ${n}`) : c.gray('0');
 }
 
-/**
- * mission contracts MissionModuleResult to carry quarantinedPaths/
- * quarantineCommitHash once the commit step splits out-of-bounds changes
- * into their own commit, but this package may build against a @swarm-os/core
- * snapshot from before those fields landed. Read them defensively, same as
- * verifyOutcomeOf/refusalCountOf above.
- */
 export function quarantinedPathsOf(m: MissionModuleResult): string[] {
-  return (m as unknown as { quarantinedPaths?: string[] }).quarantinedPaths ?? [];
+  return m.quarantinedPaths;
 }
 
 export function quarantineCommitHashOf(m: MissionModuleResult): string | undefined {
-  return (m as unknown as { quarantineCommitHash?: string }).quarantineCommitHash;
+  return m.quarantineCommitHash;
+}
+
+/**
+ * The lines printed under "N file(s) quarantined…", first as a warn() header
+ * then note()s — pulled out as plain strings so truncation and hash
+ * formatting can be pinned without driving a full missionCommand run.
+ */
+export function quarantineSummaryLines(modules: MissionModuleResult[]): string[] {
+  const quarantined = modules.filter((m) => quarantinedPathsOf(m).length > 0);
+  if (quarantined.length === 0) return [];
+  const total = quarantined.reduce((sum, m) => sum + quarantinedPathsOf(m).length, 0);
+  const lines: string[] = [`${total} file(s) quarantined out of bounds into a separate commit:`];
+  for (const m of quarantined) {
+    const paths = quarantinedPathsOf(m);
+    const hash = quarantineCommitHashOf(m);
+    lines.push(`  ${m.module}${hash ? ` — commit ${c.bold(hash)}` : ''}`);
+    for (const p of paths.slice(0, 12)) lines.push(`    ${p}`);
+    if (paths.length > 12) lines.push(`    … and ${paths.length - 12} more`);
+  }
+  lines.push('  Drop that commit with a rebase to keep it off the branch.');
+  return lines;
 }
 
 export async function missionCommand(args: ParsedArgs): Promise<number> {
@@ -285,19 +299,11 @@ export async function missionCommand(args: ParsedArgs): Promise<number> {
     note('  Review these before merging — a module reached outside its own domain.');
   }
 
-  const quarantined = result.modules.filter((m) => quarantinedPathsOf(m).length > 0);
-  if (quarantined.length > 0) {
+  const [quarantineHeader, ...quarantineRest] = quarantineSummaryLines(result.modules);
+  if (quarantineHeader) {
     line();
-    const total = quarantined.reduce((sum, m) => sum + quarantinedPathsOf(m).length, 0);
-    warn(`${total} file(s) quarantined out of bounds into a separate commit:`);
-    for (const m of quarantined) {
-      const paths = quarantinedPathsOf(m);
-      const hash = quarantineCommitHashOf(m);
-      note(`  ${m.module}${hash ? ` — commit ${c.bold(hash)}` : ''}`);
-      for (const p of paths.slice(0, 12)) note(`    ${p}`);
-      if (paths.length > 12) note(`    … and ${paths.length - 12} more`);
-    }
-    note('  Drop that commit with a rebase to keep it off the branch.');
+    warn(quarantineHeader);
+    for (const l of quarantineRest) note(l);
   }
 
   const worked = result.modules.filter((m) => m.branch && m.changedFiles.length > 0);

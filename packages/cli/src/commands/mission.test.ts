@@ -17,6 +17,7 @@ import {
   formatVerify,
   quarantineCommitHashOf,
   quarantinedPathsOf,
+  quarantineSummaryLines,
   refusalCountOf,
   verifyOutcomeOf,
 } from './mission.js';
@@ -58,15 +59,42 @@ test('formatRefusals only calls out a nonzero count', () => {
   assert.notEqual(flagged, formatRefusals(0));
 });
 
-test('quarantinedPathsOf reads the field verbatim and defaults to empty when absent', () => {
+test('quarantinedPathsOf reads the field verbatim', () => {
   assert.deepEqual(
     quarantinedPathsOf(fakeResult({ quarantinedPaths: ['assets/foo.wav', 'assets/CREDITS.md'] })),
     ['assets/foo.wav', 'assets/CREDITS.md'],
   );
-  assert.deepEqual(quarantinedPathsOf(fakeResult()), []);
+  assert.deepEqual(quarantinedPathsOf(fakeResult({ quarantinedPaths: [] })), []);
 });
 
 test('quarantineCommitHashOf reads the field verbatim and is undefined when absent', () => {
   assert.equal(quarantineCommitHashOf(fakeResult({ quarantineCommitHash: 'abc1234' })), 'abc1234');
   assert.equal(quarantineCommitHashOf(fakeResult()), undefined);
+});
+
+test('quarantineSummaryLines is empty when nothing was quarantined', () => {
+  assert.deepEqual(quarantineSummaryLines([fakeResult({ quarantinedPaths: [] })]), []);
+});
+
+test('quarantineSummaryLines includes the commit hash when present', () => {
+  const lines = quarantineSummaryLines([
+    fakeResult({ module: 'cli', quarantinedPaths: ['assets/foo.wav'], quarantineCommitHash: 'abc1234' }),
+  ]);
+  assert.ok(lines.some((l) => l.includes('cli') && l.includes('abc1234')));
+});
+
+test('quarantineSummaryLines omits the commit note when no hash is given', () => {
+  const lines = quarantineSummaryLines([
+    fakeResult({ module: 'cli', quarantinedPaths: ['assets/foo.wav'] }),
+  ]);
+  assert.ok(lines.some((l) => l.includes('cli')));
+  assert.ok(!lines.some((l) => /commit/.test(l) && l.includes('cli')));
+});
+
+test('quarantineSummaryLines truncates long path lists and reports the remainder', () => {
+  const paths = Array.from({ length: 15 }, (_, i) => `assets/file-${i}.wav`);
+  const lines = quarantineSummaryLines([fakeResult({ module: 'cli', quarantinedPaths: paths })]);
+  for (const p of paths.slice(0, 12)) assert.ok(lines.includes(`    ${p}`));
+  for (const p of paths.slice(12)) assert.ok(!lines.some((l) => l.includes(p)));
+  assert.ok(lines.some((l) => l.includes('3 more')));
 });
