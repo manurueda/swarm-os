@@ -82,6 +82,10 @@ export interface AgentLedgerEntry {
   durationMs?: number;
   /** Files changed outside the module's owned globs. Empty is the happy path. */
   ownershipViolations?: string[];
+  /** Outcome of the harness's post-work verify command, if one was configured. */
+  verifyOutcome?: 'passed' | 'failed' | 'skipped-no-command';
+  /** Tool calls refused for requiring approval, counted from the translated event stream. */
+  refusalCount?: number;
 }
 
 /** How a mission decomposes across modules, produced by the router. */
@@ -192,7 +196,7 @@ export type SwarmEvent =
   | { type: 'agent.start'; at: string; agentId: string; role: string; module?: string; sessionId: string; model?: string; cwd: string }
   | { type: 'agent.text'; at: string; agentId: string; text: string }
   | { type: 'agent.tool'; at: string; agentId: string; tool: string; summary: string }
-  | { type: 'agent.tool_result'; at: string; agentId: string; tool: string; ok: boolean }
+  | { type: 'agent.tool_result'; at: string; agentId: string; tool: string; ok: boolean; refused?: boolean }
   | { type: 'agent.usage'; at: string; agentId: string; usage: UsageSnapshot }
   | { type: 'agent.done'; at: string; agentId: string; ok: boolean; result?: string; structured?: unknown; usage?: UsageSnapshot; costUsd?: number; durationMs?: number }
   | { type: 'agent.error'; at: string; agentId: string; message: string }

@@ -94,6 +94,30 @@ function readRateLimit(raw: unknown): RateLimitSnapshot | undefined {
   };
 }
 
+// The exact strings Claude Code uses when a tool call is refused because the
+// harness's permission mode denies it rather than the tool itself failing.
+// Observed directly from a sandboxed run: `npm test`/`npx tsc --build` refused
+// with 'requires approval' and nothing else in the output distinguishes a
+// refusal from an ordinary tool error.
+const REFUSAL_PATTERNS = [/requires approval/i, /permission denied/i, /not been granted/i];
+
+function extractText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => (isRecord(block) && typeof block['text'] === 'string' ? block['text'] : ''))
+      .join(' ');
+  }
+  return '';
+}
+
+/** Whether an errored tool_result block was refused for requiring approval. */
+function isRefusal(block: AnyRecord): boolean {
+  if (block['is_error'] !== true) return false;
+  const text = extractText(block['content']);
+  return REFUSAL_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 /** One-line human summary of a tool call, for the live display. */
 function summarizeToolInput(tool: string, input: unknown): string {
   if (!isRecord(input)) return '';
@@ -201,6 +225,7 @@ export function translate(raw: unknown, ctx: TranslateContext): SwarmEvent[] {
         agentId: ctx.agentId,
         tool: '',
         ok: block['is_error'] !== true,
+        ...(isRefusal(block) ? { refused: true } : {}),
       });
     }
     return events;

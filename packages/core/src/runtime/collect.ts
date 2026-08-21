@@ -19,6 +19,8 @@ export interface AgentOutcome {
   costUsd?: number;
   durationMs?: number;
   error?: string;
+  /** Tool calls refused for requiring approval, e.g. blocked by the sandbox's permission mode. */
+  refusalCount: number;
 }
 
 export async function collectAgent(
@@ -27,7 +29,7 @@ export async function collectAgent(
   onEvent?: (event: SwarmEvent) => void | Promise<void>,
   signal?: AbortSignal,
 ): Promise<AgentOutcome> {
-  const outcome: AgentOutcome = { ok: false };
+  const outcome: AgentOutcome = { ok: false, refusalCount: 0 };
 
   for await (const event of runtime.run(spec, signal)) {
     await onEvent?.(event);
@@ -35,6 +37,9 @@ export async function collectAgent(
     switch (event.type) {
       case 'agent.start':
         outcome.sessionId = event.sessionId;
+        break;
+      case 'agent.tool_result':
+        if (event.refused) outcome.refusalCount += 1;
         break;
       case 'agent.done':
         outcome.ok = event.ok;

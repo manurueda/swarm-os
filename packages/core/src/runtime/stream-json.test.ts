@@ -99,7 +99,52 @@ test('a tool result comes back as a synthetic user turn', () => {
   assert.equal(events.length, 1);
   const [result] = events;
   assert.equal(result?.type, 'agent.tool_result');
-  if (result?.type === 'agent.tool_result') assert.equal(result.ok, false);
+  if (result?.type === 'agent.tool_result') {
+    assert.equal(result.ok, false);
+    assert.equal(result.refused, undefined, 'a plain error is not a refusal');
+  }
+});
+
+test('a tool result refused for requiring approval is flagged', () => {
+  const events = translate(
+    {
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            is_error: true,
+            content: [{ type: 'text', text: 'Bash requires approval to run in this session.' }],
+          },
+        ],
+      },
+    },
+    ctx(),
+  );
+  assert.equal(events.length, 1);
+  const [result] = events;
+  assert.equal(result?.type, 'agent.tool_result');
+  if (result?.type === 'agent.tool_result') {
+    assert.equal(result.ok, false);
+    assert.equal(result.refused, true);
+  }
+});
+
+test('a stream with no refusals never sets the refused flag', () => {
+  const events = [
+    translate({ type: 'user', message: { content: [{ type: 'tool_result', is_error: false }] } }, ctx()),
+    translate(
+      {
+        type: 'user',
+        message: { content: [{ type: 'tool_result', is_error: true, content: 'file not found' }] },
+      },
+      ctx(),
+    ),
+  ].flat();
+  assert.equal(events.length, 2);
+  for (const event of events) {
+    if (event.type === 'agent.tool_result') assert.equal(event.refused, undefined);
+  }
 });
 
 test('a result event terminates the agent with usage and cost', () => {

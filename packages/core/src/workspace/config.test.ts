@@ -51,3 +51,13 @@ test('the verify gate is off until a project opts in', () => {
   assert.equal(DEFAULT_CONFIG.verifyCommand, '');
   assert.deepEqual(DEFAULT_CONFIG.verifyEnv, {});
 });
+
+test('maxVerifyRounds defaults to 2 when absent from an on-disk config', () => {
+  assert.equal(DEFAULT_CONFIG.maxVerifyRounds, 2);
+  assert.equal(parseConfig('verifyCommand: npm test\n').maxVerifyRounds, 2);
+});
+
+test('an explicit maxVerifyRounds round-trips through read/write', () => {
+  const config = { ...DEFAULT_CONFIG, maxVerifyRounds: 5 };
+  assert.deepEqual(parseConfig(serializeConfig(config)), config);
+});

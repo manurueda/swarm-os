@@ -30,12 +30,41 @@ import {
   warn,
 } from '../ui.js';
 
+type VerifyOutcome = 'passed' | 'failed' | 'skipped-no-command';
+
 interface AgentRow {
   module: string;
   state: 'waiting' | 'working' | 'done' | 'failed';
   activity: string;
   tokens?: number;
   window?: number;
+  verifyOutcome?: VerifyOutcome;
+  refusalCount?: number;
+}
+
+/**
+ * mission contracts MissionModuleResult to carry verifyOutcome/refusalCount,
+ * but this package may build against a @swarm-os/core snapshot from before
+ * those fields landed. Read them defensively so cli keeps compiling either
+ * way, and render nothing (rather than guess) when they are absent.
+ */
+export function verifyOutcomeOf(m: MissionModuleResult): VerifyOutcome | undefined {
+  return (m as unknown as { verifyOutcome?: VerifyOutcome }).verifyOutcome;
+}
+
+export function refusalCountOf(m: MissionModuleResult): number {
+  return (m as unknown as { refusalCount?: number }).refusalCount ?? 0;
+}
+
+export function formatVerify(outcome: VerifyOutcome | undefined): string {
+  if (outcome === 'passed') return c.green('passed');
+  if (outcome === 'failed') return c.red('failed');
+  if (outcome === 'skipped-no-command') return c.gray('skipped');
+  return c.gray('—');
+}
+
+export function formatRefusals(n: number): string {
+  return n > 0 ? c.red(`${symbols.warn} ${n}`) : c.gray('0');
 }
 
 export async function missionCommand(args: ParsedArgs): Promise<number> {
@@ -76,9 +105,11 @@ export async function missionCommand(args: ParsedArgs): Promise<number> {
             ? c.green(symbols.active)
             : c.gray(symbols.sleeping);
     const usage = row.tokens ? c.gray(formatTokens(row.tokens)) : '';
+    const verify = row.verifyOutcome ? ` verify:${formatVerify(row.verifyOutcome)}` : '';
+    const refused = row.refusalCount ? ` ${formatRefusals(row.refusalCount)} refused` : '';
     board.set(
       `a:${module}`,
-      `  ${mark} ${c.bold(pad(module, 20))} ${pad(clip(row.activity, 44), 44)} ${usage}`,
+      `  ${mark} ${c.bold(pad(module, 20))} ${pad(clip(row.activity, 44), 44)} ${usage}${verify}${refused}`,
     );
   };
 
@@ -157,6 +188,18 @@ export async function missionCommand(args: ParsedArgs): Promise<number> {
   } catch (err) {
     board.stop();
     throw err instanceof Error ? new UserError(err.message) : err;
+  }
+
+  for (const m of result.modules) {
+    const row = rows.get(m.module);
+    if (row) {
+      rows.set(m.module, {
+        ...row,
+        verifyOutcome: verifyOutcomeOf(m),
+        refusalCount: refusalCountOf(m),
+      });
+      paintRow(m.module);
+    }
   }
 
   paintPhase(phase.replace(/^\S+\s+/, '') || 'finished', true);
@@ -276,10 +319,25 @@ function printResults(modules: MissionModuleResult[]): void {
       status,
       `${m.changedFiles.length} files`,
       formatTokens(m.contextTokens),
-      c.gray(clip(m.error ?? m.report?.summary ?? '', 48)),
+      formatVerify(verifyOutcomeOf(m)),
+      formatRefusals(refusalCountOf(m)),
+      c.gray(clip(m.error ?? m.report?.summary ?? '', 40)),
     ];
   });
-  table(rows, { head: ['  module', 'status', 'changed', 'context', ''] });
+  table(rows, { head: ['  module', 'status', 'changed', 'context', 'verify', 'refused', ''] });
+
+  // A nonzero refusal count means the harness blocked the agent from running
+  // something it needed (usually a misconfigured permission mode) — that is
+  // urgent enough to call out here rather than leave it in the table above.
+  const refused = modules.filter((m) => refusalCountOf(m) > 0);
+  if (refused.length > 0) {
+    line();
+    warn(
+      `${refused.reduce((sum, m) => sum + refusalCountOf(m), 0)} tool call(s) were refused by the permission layer:`,
+    );
+    for (const m of refused) note(`  ${m.module} — ${refusalCountOf(m)} refused`);
+    note('  Check config.permissionMode — a misconfigured mode blocks agents from doing real work.');
+  }
 
   const followUps = modules.flatMap((m) => m.report?.followUps ?? []);
   if (followUps.length > 0) {

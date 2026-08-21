@@ -11,8 +11,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { tasksFromSignals } from './run.js';
+import { tasksFromSignals, verifyUsable } from './run.js';
 import type { Signal, SignalSeverity } from '../architecture/signals.js';
+import type { MissionModuleResult } from '../mission/run.js';
 
 function signal(kind: string, options: Partial<Signal> = {}): Signal {
   return {
@@ -81,4 +82,73 @@ test('a god-file goal carries the concrete file to start with', () => {
 test('an untested module is told not to invent a harness the project never chose', () => {
   const [task] = tasksFromSignals([signal('untested-module')]);
   assert.match(task?.goal ?? '', /no test setup at all, say so and stop/);
+});
+
+/**
+ * `verifyUsable` is the loop's only use of the shared verify helper (owned by
+ * the `mission` module) — these tests drive it through a fake in place of the
+ * real one, the same seam a real caller passes nothing for.
+ */
+
+function moduleResult(overrides: Partial<MissionModuleResult> = {}): MissionModuleResult {
+  return {
+    module: 'rendering',
+    ok: true,
+    changedFiles: ['rendering/a.ts'],
+    ownershipViolations: [],
+    worktree: '/tmp/worktree-rendering',
+    verifyOutcome: 'skipped-no-command',
+    refusalCount: 0,
+    ...overrides,
+  };
+}
+
+test('a passing shared verify result clears every usable module for merge', async () => {
+  const result = await verifyUsable(
+    [moduleResult(), moduleResult({ module: 'billing', worktree: '/tmp/worktree-billing' })],
+    'npm test',
+    async () => ({ outcome: 'passed', output: '' }),
+  );
+  assert.deepEqual(result, { ok: true });
+});
+
+test('a failing shared verify result blocks the merge and says why', async () => {
+  const result = await verifyUsable([moduleResult()], 'npm test', async () => ({
+    outcome: 'failed',
+    output: '3 tests failed',
+  }));
+  assert.equal(result.ok, false);
+  assert.match(result.note ?? '', /npm test failed — nothing merged/);
+});
+
+test('a skipped-no-command shared verify result is not treated as a pass', async () => {
+  const result = await verifyUsable([moduleResult()], '', async () => ({
+    outcome: 'skipped-no-command',
+    output: '',
+  }));
+  assert.equal(result.ok, false);
+});
+
+test('the first failing module stops checking the rest', async () => {
+  const calls: string[] = [];
+  const result = await verifyUsable(
+    [moduleResult({ module: 'a' }), moduleResult({ module: 'b' })],
+    'npm test',
+    async (module) => {
+      calls.push(module);
+      return { outcome: 'failed', output: '' };
+    },
+  );
+  assert.equal(result.ok, false);
+  assert.deepEqual(calls, ['a']);
+});
+
+test('a module with no worktree cannot be verified and is treated as a failure', async () => {
+  let called = false;
+  const result = await verifyUsable([moduleResult({ worktree: undefined })], 'npm test', async () => {
+    called = true;
+    return { outcome: 'passed', output: '' };
+  });
+  assert.equal(result.ok, false);
+  assert.equal(called, false);
 });

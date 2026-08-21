@@ -24,6 +24,8 @@ import type {
 import { collectAgent } from '../runtime/collect.js';
 import { buildContextPack, dependencyContracts, sleepSwarm, wakeSwarm } from '../swarm/manager.js';
 import { reviewModuleChange, type ModuleReview } from './review.js';
+import { runVerifyLoop } from './verify-loop.js';
+import type { VerifyOutcome } from './verify.js';
 import { checkOwnership } from '../swarm/ownership.js';
 import { Scheduler } from '../swarm/scheduler.js';
 import { Workspace } from '../workspace/store.js';
@@ -180,6 +182,10 @@ export interface MissionModuleResult {
   ownershipViolations: string[];
   diffStat?: string;
   review?: ModuleReview;
+  /** Outcome of config.verifyCommand, run in the module's worktree before review. */
+  verifyOutcome: VerifyOutcome;
+  /** 'requires approval' tool refusals the work agent hit across all its turns. */
+  refusalCount: number;
   committed?: boolean;
   /** Why the commit failed, when it did. A branch is not ready without one. */
   commitError?: string;
@@ -346,6 +352,8 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
         ok: false,
         changedFiles: [],
         ownershipViolations: [],
+        verifyOutcome: 'skipped-no-command',
+        refusalCount: 0,
         error: 'module disappeared between routing and spawn',
       };
     }
@@ -376,6 +384,8 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
           ok: false,
           changedFiles: [],
           ownershipViolations: [],
+          verifyOutcome: 'skipped-no-command',
+          refusalCount: 0,
           error: err instanceof Error ? err.message : String(err),
         };
       }
@@ -409,34 +419,59 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
       '',
       ...spec.owns.map((g) => `- \`${g}\``),
       '',
-      'Do the work, verify it, then report.',
+      'Do NOT attempt to run tests, builds, package managers or git yourself —',
+      'this sandbox refuses those commands, and trying just burns your context',
+      "on retries. The harness runs the project's own verify command after you",
+      'report, and will hand back any failures for you to fix. Your code edits',
+      'are the deliverable, not a self-verified report.',
     ].join('\n');
 
     report({ phase: 'work', message: 'working', module: spec.slug });
 
-    const outcome = await collectAgent(
-      runtime,
-      {
-        id: `work:${spec.slug}`,
-        role: 'module',
-        module: spec.slug,
-        prompt,
-        systemPrompt: workerCharter(spec),
-        cwd: worktreePath,
-        tools: config.tools,
-        model: config.model,
-        permissionMode: config.permissionMode as never,
-        jsonSchema: WORK_REPORT_SCHEMA,
-        sessionId: randomUUID(),
-        lean: true,
-        // Work agents run inside the target repo, so let its own settings apply.
-        settingSources: 'project',
-      },
-      log,
-      options.signal,
-    );
+    const workSpec = {
+      id: `work:${spec.slug}`,
+      role: 'module',
+      module: spec.slug,
+      prompt,
+      systemPrompt: workerCharter(spec),
+      cwd: worktreePath,
+      tools: config.tools,
+      model: config.model,
+      permissionMode: config.permissionMode as never,
+      jsonSchema: WORK_REPORT_SCHEMA,
+      sessionId: randomUUID(),
+      lean: true,
+      // Work agents run inside the target repo, so let its own settings apply.
+      settingSources: 'project',
+    };
 
-    const workReport = parseWorkReport(outcome.structured);
+    let outcome = await collectAgent(runtime, workSpec, log, options.signal);
+    let workReport = parseWorkReport(outcome.structured);
+
+    // Verify before review: the author cannot run its own verify command, so
+    // this is the only step that knows whether the change actually works.
+    report({ phase: 'work', message: 'verifying', module: spec.slug });
+    // TODO(workspace-git): SwarmConfig does not carry maxVerifyRounds yet —
+    // this bridges to it ahead of that field landing. Drop the cast once it does.
+    const maxVerifyRounds = (config as SwarmConfig & { maxVerifyRounds?: number }).maxVerifyRounds ?? 2;
+    const verifyLoop = await runVerifyLoop({
+      runtime,
+      module: spec.slug,
+      worktreePath,
+      verifyCommand: config.verifyCommand,
+      maxVerifyRounds,
+      baseSpec: workSpec,
+      initialOutcome: outcome,
+      parseWorkReport,
+      onEvent: log,
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    if (verifyLoop.lastOutcome) outcome = verifyLoop.lastOutcome;
+    if (verifyLoop.lastWorkReport) workReport = verifyLoop.lastWorkReport;
+    const costUsd =
+      outcome.costUsd !== undefined || verifyLoop.resumeCostUsd > 0
+        ? (outcome.costUsd ?? 0) + verifyLoop.resumeCostUsd
+        : undefined;
 
     const changed = repoIsGit ? await changedFiles(worktreePath, base, linked) : [];
     const ownership = checkOwnership(changed, spec.owns);
@@ -507,10 +542,12 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
       ownershipViolations: ownership.violations,
       ...(stat ? { diffStat: stat } : {}),
       ...(review ? { review } : {}),
+      verifyOutcome: verifyLoop.verifyOutcome,
+      refusalCount: verifyLoop.refusalCount,
       committed,
       ...(commitError ? { commitError } : {}),
       ...(outcome.usage ? { contextTokens: outcome.usage.contextTokens } : {}),
-      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
+      ...(costUsd !== undefined ? { costUsd } : {}),
       ...(outcome.error ? { error: outcome.error } : {}),
     };
   });
@@ -524,6 +561,8 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
           ok: false,
           changedFiles: [],
           ownershipViolations: [],
+          verifyOutcome: 'skipped-no-command',
+          refusalCount: 0,
           error: r.message,
         }
       : r,
@@ -703,6 +742,8 @@ function renderMissionReport(
     if (r.branch) lines.push(`- Branch: \`${r.branch}\``);
     if (r.worktree) lines.push(`- Worktree: \`${r.worktree}\``);
     if (r.contextTokens) lines.push(`- Context used: ${r.contextTokens.toLocaleString()} tokens`);
+    lines.push(`- Verify: **${r.verifyOutcome}**`);
+    if (r.refusalCount > 0) lines.push(`- Refused permissions: ${r.refusalCount}`);
     if (r.error) lines.push(`- Error: ${r.error}`);
     lines.push('');
 

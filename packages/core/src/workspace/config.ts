@@ -87,6 +87,16 @@ export interface SwarmConfig {
    * editable install. Anything here overrides that.
    */
   verifyEnv: Record<string, string>;
+  /**
+   * How many times to resume a work agent with the verify command's failure
+   * output before giving up and reporting the module as failed verification.
+   *
+   * A work agent runs sandboxed and cannot run the verify command itself, so
+   * the harness runs it and hands back failures for the agent to fix. This
+   * caps that fix-and-recheck loop so a persistently broken change cannot
+   * spin forever.
+   */
+  maxVerifyRounds: number;
   /** Built-in tools work agents may use. */
   tools: string[];
   /** Pause spawning when the subscription rate limit reports this status. */
@@ -114,6 +124,7 @@ export const DEFAULT_CONFIG: SwarmConfig = {
   contextFileIndex: 160,
   verifyCommand: '',
   verifyEnv: {},
+  maxVerifyRounds: 2,
   tools: ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'],
   pauseOnRateLimitStatus: ['rejected', 'blocked'],
 };

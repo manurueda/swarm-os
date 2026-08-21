@@ -33,6 +33,7 @@ import { buildImportGraph } from '../architecture/import-graph.js';
 import { computeSignals, type Signal } from '../architecture/signals.js';
 import { estimateTokens } from '../workspace/store.js';
 import { runMission, type MissionModuleResult } from '../mission/run.js';
+import { runVerify } from '../mission/verify.js';
 import { git, currentBranch, isWorkingTreeCleanIgnoringSwarm } from '../git/worktree.js';
 
 export interface LoopTask {
@@ -311,18 +312,14 @@ export async function runLoop(options: RunLoopOptions): Promise<LoopResult> {
     // isolation is verifying the combination.
     if (config.verifyCommand) {
       report({ phase: 'verify', message: config.verifyCommand, task });
-      for (const result of usable) {
-        const passed = result.worktree
-          ? await runVerify(result.worktree, config.verifyCommand, config.verifyEnv)
-          : false;
-        if (!passed) {
-          attempt.verified = false;
-          attempt.note = `${config.verifyCommand} failed — nothing merged`;
-          attempt.finishedAt = new Date().toISOString();
-          attempts.push(attempt);
-          consecutiveFailures += 1;
-          continue outer;
-        }
+      const verification = await verifyUsable(usable, config.verifyCommand);
+      if (!verification.ok) {
+        attempt.verified = false;
+        attempt.note = verification.note;
+        attempt.finishedAt = new Date().toISOString();
+        attempts.push(attempt);
+        consecutiveFailures += 1;
+        continue outer;
       }
       attempt.verified = true;
     }
@@ -395,52 +392,34 @@ async function survey(workspace: Workspace, config: SwarmConfig): Promise<Signal
   }).signals;
 }
 
+/** What the shared `runVerify` helper (owned by the `mission` module) returns. */
+interface VerifyResult {
+  outcome: 'passed' | 'failed' | 'skipped-no-command';
+  output: string;
+}
+
+type VerifyFn = (module: string, worktreePath: string, command: string) => Promise<VerifyResult>;
+
 /**
- * Run the verify command inside a worktree.
+ * Decide whether a mission's usable module changes are safe to merge.
  *
- * The environment matters as much as the command. A worktree is a bare
- * checkout and a project's installed tooling still points at the original
- * clone, so without help the verification runs against the wrong source or
- * fails to resolve it at all. Both look like the change is broken when it is
- * not — and an unattended loop then throws away work that was correct.
- *
- * Observed: a mission split a 1,712-line module into a clean package, the
- * reviewer approved it, and the gate rejected it with 246 collection errors
- * that were entirely an artefact of the worktree. With PYTHONPATH pointed at
- * the worktree's own sources the same branch passed the whole suite.
+ * Pulled out of `runLoop` so its use of the shared verify helper can be
+ * tested — passing, failing, or the module producing no worktree to verify —
+ * without spinning up a real git repo or agent runtime. `verify` defaults to
+ * the real shared helper; tests supply a fake.
  */
-async function runVerify(
-  worktree: string,
-  command: string,
-  extraEnv: Record<string, string> = {},
-): Promise<boolean> {
-  const { spawn } = await import('node:child_process');
-  const { existsSync } = await import('node:fs');
-  const { join, isAbsolute } = await import('node:path');
-
-  const env: NodeJS.ProcessEnv = { ...process.env };
-
-  // PYTHONPATH precedes site-packages, so pointing it at the worktree's own
-  // sources shadows an editable install pointing at the original clone.
-  if (existsSync(join(worktree, 'src')) && existsSync(join(worktree, 'pyproject.toml'))) {
-    const own = join(worktree, 'src');
-    env['PYTHONPATH'] = env['PYTHONPATH'] ? `${own}:${env['PYTHONPATH']}` : own;
+export async function verifyUsable(
+  usable: MissionModuleResult[],
+  verifyCommand: string,
+  verify: VerifyFn = runVerify,
+): Promise<{ ok: boolean; note?: string }> {
+  for (const result of usable) {
+    const verified = result.worktree
+      ? await verify(result.module, result.worktree, verifyCommand)
+      : { outcome: 'failed' as const, output: 'no worktree to verify' };
+    if (verified.outcome !== 'passed') {
+      return { ok: false, note: `${verifyCommand} failed — nothing merged` };
+    }
   }
-
-  for (const [key, value] of Object.entries(extraEnv)) {
-    env[key] = isAbsolute(value) ? value : join(worktree, value);
-  }
-
-  return new Promise((resolve) => {
-    const child = spawn(command, {
-      cwd: worktree,
-      shell: true,
-      env,
-      stdio: 'ignore',
-      // A hung build must not hold a five-hour run hostage.
-      timeout: 15 * 60_000,
-    });
-    child.on('close', (code) => resolve(code === 0));
-    child.on('error', () => resolve(false));
-  });
+  return { ok: true };
 }
