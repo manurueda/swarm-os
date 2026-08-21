@@ -11,36 +11,35 @@ _Durable knowledge for the `mission` swarm. Read on wake, rewritten on sleep._
 - The router agent is spawned with tools: [] — decides routing purely from summary + one-line descriptions, never explores the filesystem. <sub>`packages/core/src/mission/route.ts`</sub>
 - The reviewer agent is spawned with tools restricted to ['Read','Grep','Glob'] — structurally read-only, cannot edit the diff it judges. <sub>`packages/core/src/mission/review.ts`</sub>
 - parsePlan() (route.ts) drops any assignment whose module slug is unknown or task/module fields are missing — hallucinated slugs are silently discarded, no worker spawned. <sub>`packages/core/src/mission/route.ts`</sub>
-- A module result's ok flag requires outcome.ok AND workReport.status !== 'blocked' AND review.verdict !== 'reject'; a 'changes-needed' review verdict does NOT flip ok to false. As of this mission, moduleResult.ok also does NOT consult verifyOutcome — a module that failed verification through all maxVerifyRounds can still ship ok:true and get committed. This is a known gap, not yet flagged as intentional-vs-bug by the task author. <sub>`packages/core/src/mission/run.ts`</sub>
+- moduleResult.ok requires ALL of: outcome.ok, workReport.status !== 'blocked', review.verdict !== 'reject', AND verifyLoop.verifyOutcome !== 'failed'. A module that exhausts all maxVerifyRounds still failing verification now reports ok:false — this gap is fixed as of this mission. A 'changes-needed' review verdict still does NOT flip ok to false. <sub>`packages/core/src/mission/run.ts`</sub>
+- Module cost aggregation: `initialCostUsd` is captured from the work agent's outcome.costUsd *before* `outcome` is reassigned to `verifyLoop.lastOutcome`; final `costUsd = initialCostUsd + verifyLoop.resumeCostUsd`, where resumeCostUsd already sums every resume round. Never read outcome.costUsd after the reassignment for this sum — it double-counts the last round and drops the first turn. <sub>`packages/core/src/mission/run.ts`</sub>
 - Diffs longer than MAX_DIFF_CHARS (60,000) are truncated before being shown to the reviewer, with a note to read the files directly for the rest. <sub>`packages/core/src/mission/review.ts`</sub>
 - record.status after all modules run is 'review' (all delivered), 'partial' (some delivered), or 'failed' (none) — never a literal 'complete'. <sub>`packages/core/src/mission/run.ts`</sub>
-- runVerify(module, worktreePath, verifyCommand) -> Promise<{outcome:'passed'|'failed'|'skipped-no-command', output}> is a cross-module contract shared verbatim with swarm-orchestration's loop/run.ts migration. It has no extraEnv param — config.verifyEnv PYTHONPATH-style overrides are NOT carried over, only the automatic Python/src heuristic. <sub>`packages/core/src/mission/verify.ts`</sub>
-- runVerifyLoop always calls verify() at least once even with an empty verifyCommand — it delegates the "configured at all" check to the injected verify fn (which returns skipped-no-command), not to a gate before calling it. With maxVerifyRounds=N it calls verify() up to N times but resumes the agent at most N-1 times (the final failed round gets no further turn). <sub>`packages/core/src/mission/verify-loop.ts`</sub>
-- MissionModuleResult.verifyOutcome and .refusalCount are non-optional, populated on every return path including both early-error paths and the scheduler-error fallback, matching the existing convention for ok/changedFiles/ownershipViolations. <sub>`packages/core/src/mission/run.ts`</sub>
+- runVerify(module, worktreePath, verifyCommand) -> Promise<{outcome:'passed'|'failed'|'skipped-no-command', output}> is a cross-module contract shared verbatim with swarm-orchestration's loop/run.ts. It still has NO env/extraEnv param — the module/worktree/verifyCommand signature is unchanged; PYTHONPATH shadowing is hardcoded inside it, config.verifyEnv cannot be passed through without a signature change here first. <sub>`packages/core/src/mission/verify.ts`</sub>
+- runVerifyLoop always calls verify() at least once even with an empty verifyCommand — the injected verify fn (not a gate before calling it) decides "configured at all" and returns skipped-no-command. With maxVerifyRounds=N it calls verify() up to N times but resumes the agent at most N-1 times. <sub>`packages/core/src/mission/verify-loop.ts`</sub>
+- MissionModuleResult.verifyOutcome and .refusalCount are non-optional, populated on every return path including both early-error paths and the scheduler-error fallback. AgentOutcome.refusalCount (runtime/collect.ts) and SwarmConfig.maxVerifyRounds (workspace/config.ts) are themselves now required, non-optional fields upstream — no bridging casts remain in this module for either. <sub>`packages/core/src/mission/run.ts`, `packages/core/src/mission/verify-loop.ts`</sub>
 
 ## Gotchas
 
-- MissionResult.costUsd only sums each result's r.costUsd (work agent cost). Router cost, per-module reviewer cost, sleep/compression cost, and (as of this mission) resume-verify cost are NOT reliably included — see the double-counting bug below. <sub>`packages/core/src/mission/run.ts`</sub>
+- MissionResult.costUsd only sums each result's r.costUsd (work agent cost, now correctly aggregated across resume rounds). Router cost, per-module reviewer cost, and sleep/compression cost are still NOT included. <sub>`packages/core/src/mission/run.ts`</sub>
 - record.status of 'review' after full success means 'ready for review', not 'in progress'. <sub>`packages/core/src/mission/run.ts`</sub>
 - If the target repo is not a git repo, worktreePath falls back to workspace.repoRoot — worker edits the real checkout with no isolation, branch, commit, diff review, or ownership check (changed=[] always). <sub>`packages/core/src/mission/run.ts`</sub>
 - dryRun stops after routing + writing plan.md/mission record (status 'planned') — no worktree, no verify, no agents spawned. <sub>`packages/core/src/mission/run.ts`</sub>
 - sleepSwarm() failure during harvest is caught and swarm force-marked 'sleeping' with no compression — never blocks completion, but memory silently doesn't improve. <sub>`packages/core/src/mission/run.ts`</sub>
-- workerCharter() embeds a large fixed rule-set as a template literal in run.ts, identical for every module/mission, not configurable.
+- workerCharter() embeds a large fixed rule-set as a template literal in run.ts, identical for every module/mission, not configurable; explicitly forbids the work agent from running tests/builds/package managers/git — harness verifies after the report.
 - options.modules (--modules override) bypasses routeMission() entirely; task === goal verbatim for every listed module, no rationale, no trimming.
-- **Known unfixed bug (changes-needed review, not yet corrected):** in run.ts ~469-474, after a resume `outcome` is reassigned to `verifyLoop.lastOutcome` (already just the resumed turn's cost), then `costUsd = (outcome.costUsd ?? 0) + verifyLoop.resumeCostUsd` double-counts that same resume cost and drops the initial work-agent turn's cost entirely. Corrupts moduleResult.costUsd. Fix before trusting cost figures on any mission that hit a resume.
-- readRefusalCount in verify-loop.ts casts `outcome as AgentOutcome & {refusalCount?: number}` — AgentOutcome has no such field yet AND runtime/collect.ts's event switch never forwards one, so in production this always evaluates to 0 today. Two runtime-owned files (claude-code-local.ts and collect.ts) both need work before refusalCount does anything real.
-- maxVerifyRounds is read via `(config as SwarmConfig & {maxVerifyRounds?: number}).maxVerifyRounds ?? 2` because workspace-git's config.ts doesn't define the field yet — a configured value in swarm.yaml cannot override the default of 2 until that lands. Delete the cast once SwarmConfig grows the field.
-- loop/run.ts (swarm-orchestration's file) still has its own un-migrated inline `runVerify(worktree, command, extraEnv)` — mission/verify.ts is the intended shared replacement, but switching loop/run.ts's import and deleting the local copy is swarm-orchestration's task, not this module's.
-- AgentLedgerEntry / persisted mission.json record.agents ledger does NOT carry verifyOutcome or refusalCount — only MissionModuleResult and report.md do. Leave the ledger alone unless a task explicitly asks for it there.
-- This sandbox refuses essentially all process execution (node -e, npx, npm run/build, direct tsc binary) with an unattended "requires approval" — expect to be unable to run tests/build here; verify by careful manual type-trace against actual source shapes instead, and say so explicitly rather than claiming tests pass.
+- loop/run.ts (swarm-orchestration's file) still has its own un-migrated inline runVerify(worktree, command, extraEnv). Any task asking to route config.verifyEnv through the shared mission/verify.ts helper rests on a false premise until runVerify here gains an env param — flag this if assigned such a task again.
+- AgentLedgerEntry / persisted mission.json record.agents ledger does NOT carry verifyOutcome or refusalCount — only MissionModuleResult and report.md do.
+- No test file exercises run.ts directly in this module (only mission-id.test.ts, verify.test.ts, verify-loop.test.ts exist) — cost/ok-gate logic in run.ts can only be checked by manual trace, not automated tests.
+- This sandbox refuses essentially all process execution (node -e, npx, npm run/build, direct tsc) with an unattended "requires approval" — expect to be unable to run tests/build here; verify by careful manual type-trace against actual source shapes and say so explicitly rather than claiming tests pass.
 
 ## Landmarks
 
-- `packages/core/src/mission/run.ts` — runMission() orchestrator; missionId(); WORK_REPORT_SCHEMA/WorkReport; workerCharter() (work prompt now explicitly forbids running tests/builds/package managers/git — states the harness verifies after the agent reports); renderModuleReport()/renderMissionReport() (now include Verify/refusal lines); runs runVerifyLoop() between work-agent completion and review.
+- `packages/core/src/mission/run.ts` — runMission() orchestrator; missionId(); WORK_REPORT_SCHEMA/WorkReport; workerCharter(); renderModuleReport()/renderMissionReport() (include Verify/refusal lines); runs runVerifyLoop() between work-agent completion and review; owns the ok-gate and cost-aggregation logic above.
 - `packages/core/src/mission/route.ts` — routeMission(), ROUTE_SCHEMA, ROUTER_CHARTER, renderPlan(), parsePlan().
 - `packages/core/src/mission/review.ts` — reviewModuleChange(), REVIEW_SCHEMA, REVIEWER_CHARTER (6-point check order), MAX_DIFF_CHARS=60000.
-- `packages/core/src/mission/verify.ts` — shared runVerify() helper, extracted/reused from loop/run.ts's original (loop/run.ts itself not yet migrated to it).
-- `packages/core/src/mission/verify-loop.ts` — runVerifyLoop(): dependency-injected fail-then-fix policy; resumes the work agent via runtime.run + spec.resume (through collectAgent) on verify failure, trims verify output into the fix prompt; readRefusalCount() bridge helper.
+- `packages/core/src/mission/verify.ts` — shared runVerify() helper, (module, worktree, verifyCommand) signature only, no env param.
+- `packages/core/src/mission/verify-loop.ts` — runVerifyLoop(): dependency-injected fail-then-fix policy; resumes work agent via runtime.run + spec.resume (through collectAgent) on verify failure; readRefusalCount() reads outcome.refusalCount directly (no cast).
 - `packages/core/src/mission/verify.test.ts`, `verify-loop.test.ts` — cover pass/fail-then-fix/fail-through-all-rounds/no-command + refusal counting, using a fake AgentRuntime and injected fake verify fn (no subprocess spawned).
 - `packages/core/src/mission/mission-id.test.ts` — specifies exact mission id shape: `<date>-<first-6-slug-words>-<sha256-of-full-goal,6hex>`.
 
@@ -48,7 +47,7 @@ _Durable knowledge for the `mission` swarm. Read on wake, rewritten on sleep._
 
 - runMission(options: RunMissionOptions): Promise<MissionResult>
 - missionId(goal: string, now?: Date): string
-- RunMissionOptions / MissionResult / MissionModuleResult (now includes verifyOutcome, refusalCount) / MissionProgress types
+- RunMissionOptions / MissionResult / MissionModuleResult (verifyOutcome, refusalCount required) / MissionProgress types
 - WorkReport / WORK_REPORT_SCHEMA
 - routeMission(options: RouteOptions): Promise<{ plan?: MissionPlan; outcome: AgentOutcome }>
 - renderPlan(goal, plan): string
@@ -57,4 +56,4 @@ _Durable knowledge for the `mission` swarm. Read on wake, rewritten on sleep._
 - ModuleReview / ReviewFinding types
 - REVIEW_SCHEMA
 - runVerify(module: string, worktreePath: string, verifyCommand: string): Promise<{outcome: 'passed'|'failed'|'skipped-no-command'; output: string}>
-- runVerifyLoop(...): loops runVerify + resume, up to maxVerifyRounds
+- runVerifyLoop(...): loops runVerify + resume, up to maxVerifyRounds (config.maxVerifyRounds, required field, default 2)
