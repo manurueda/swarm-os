@@ -12,7 +12,8 @@ _Durable knowledge for the `cli` swarm. Read on wake, rewritten on sleep._
 - `swarm loop` refuses to start unless the working tree is clean (ignoring .swarm/), because it runs for hours and merges into one integration branch. <sub>`packages/cli/src/commands/loop.ts`</sub>
 - parseArgs treats the first argv token as a command only when it does not start with '-'; `swarm --version`/`--help` therefore have an empty command and are handled via flags, not the command field. <sub>`packages/cli/src/args.ts`</sub>
 - dist/ is gitignored monorepo-wide, so the `swarm` binary only exists after `npm run build`; VERSION in main.ts is a hand-maintained literal, not derived from package.json. <sub>`.gitignore`</sub>
-- Cross-module contracts must exist in the producing package before CLI wires against them: importing/calling a symbol from `@swarm-os/core` that isn't yet exported (e.g. `checkStaleBuild`) breaks `tsc --build` for the whole package, not just the new feature. Confirm the export exists (barrel + relevant subpath) before landing CLI-side code that depends on it.
+- Cross-module contracts must exist in the producing package before CLI wires against them: importing/calling a symbol not yet exported breaks `tsc --build` for the whole package. When CLI code depends on fields/exports another module is landing concurrently, prefer an `as unknown as {...}` cast with graceful undefined-handling (render '—'/0) over assuming the shape — this keeps cli compiling and never invents a value regardless of merge order.
+- AgentLedgerEntry (packages/core/src/types.ts, owned by the runtime module) has no per-run diagnostic fields (e.g. verifyOutcome, refusalCount) — only the in-memory MissionModuleResult from a live `swarm mission` run can carry such fields. Any past-mission history/listing surface reading persisted MissionRecord.agents (e.g. `swarm missions`) structurally cannot show these until AgentLedgerEntry itself gains them.
 
 ## Gotchas
 
@@ -21,10 +22,14 @@ _Durable knowledge for the `cli` swarm. Read on wake, rewritten on sleep._
 - scheduleBackgroundUpdate spawns `node main.js update --background` detached with SWARM_UPDATE_WORKER=1; main.ts checks that same env var to avoid infinite update-spawning-update chains. This coupling is easy to break by refactoring either side independently. <sub>`packages/cli/src/commands/update.ts`</sub>
 - `swarm wake <module>` only flips recorded state to active — spawns no process, does no work — despite the name suggesting otherwise. <sub>`packages/cli/src/commands/swarms.ts`</sub>
 - LiveBoard degrades based on `process.stdout.isTTY`, not NO_COLOR/TERM=dumb (those only affect `c` color wrapping) — a dumb TTY still gets in-place cursor repainting. <sub>`packages/cli/src/ui.ts`</sub>
-- `swarm loop --plan` recomputes signals from scratch (buildDigest/countLines/buildImportGraph/computeSignals) rather than reusing a prior `swarm map`/`refactor` run — duplicates logic in commands/refactor.ts. <sub>`packages/cli/src/commands/loop.ts`</sub>
+- `swarm loop --plan` recomputes signals from scratch rather than reusing a prior `swarm map`/`refactor` run — duplicates logic in commands/refactor.ts. <sub>`packages/cli/src/commands/loop.ts`</sub>
 - commands/map.ts only treats a re-map as a no-op when drift.moduleCount > 0 as well as unchanged — a hand-written config.yaml with zero modules always triggers full (re)analysis. <sub>`packages/cli/src/commands/map.ts`</sub>
-- Some sandboxed worktrees have no `node_modules` and `npm run build`/`npx tsc` are blocked by the permission layer — build/typecheck/run verification may be impossible from inside such a worktree; fall back to full manual diff review and say so explicitly rather than claiming unverifiable behavior.
-- As of 2026-08-21, `@swarm-os/core` does not export `checkStaleBuild` (not in the barrel, not in `update/index.ts`, zero grep hits) — a `warnIfStaleBuild()` in commands/update.ts calling it exists on the cli side but was rejected in review and will not compile until the `runtime` module lands the export. Check for its existence before assuming this feature works or re-adding it.
+- The Bash permission layer can refuse `npm run build`/`tsc`/`node --test`/git outright in a headless sandbox with no approver present — confirmed twice now, including once in a worktree that DID have node_modules. This is a sandbox/permission-mode property, not a missing-dependency property; do not assume presence of node_modules implies verification is possible. When blocked, fall back to full manual diff/type review and say so explicitly.
+- As of 2026-08-21, `@swarm-os/core` did not export `checkStaleBuild` — a `warnIfStaleBuild()` in commands/update.ts calling it was rejected in review pending that export landing. Check it actually exists before assuming this feature works.
+- mission.ts's verifyOutcomeOf/refusalCountOf currently read MissionModuleResult's new verifyOutcome/refusalCount fields via `as unknown as {...}` cast, because packages/core hadn't declared them on MissionModuleResult at time of writing — confirm core has landed these fields (and their exact names) before trusting the rendered '—'/'0' vs real values.
+- packages/cli/src/commands/mission.test.ts asserts exact literal strings (formatVerify('passed') === 'passed', formatRefusals(2) === '! 2') that bake in unverified assumptions: that c.green/red/gray strip ANSI under non-TTY test runs, and that symbols.warn is literally '!'. Never executed (node --test was blocked) — verify against ui.ts's actual symbols/c definitions before trusting or extending these tests.
+- printResults()'s use of line()/note() for a new refusal-warning block in mission.ts was added without a diff-visible import update for those two names — check they're actually imported from ui.ts before assuming this compiles.
+- The `table()` helper in ui.ts computes column widths dynamically per row array length — adding a column to printResults() rows has no fixed-arity assumption to worry about.
 
 ## Landmarks
 
@@ -33,7 +38,7 @@ _Durable knowledge for the `cli` swarm. Read on wake, rewritten on sleep._
 - `packages/cli/src/context.ts` — CommandContext resolution, config-override merging, strictSubscription runtime preflight gate.
 - `packages/cli/src/ui.ts` — ANSI helpers, formatTokens/formatDuration/clip/pad/table, LiveBoard.
 - `packages/cli/src/server.ts` — HTTP server for `swarm ui --serve`: renderUi() page plus /api/snapshot, /api/events (SSE), /api/mission (POST, token-gated, one-mission-at-a-time).
-- `packages/cli/src/commands/mission.ts` — largest handler; wires runMission callbacks into a LiveBoard.
+- `packages/cli/src/commands/mission.ts` — largest handler; wires runMission callbacks into a LiveBoard; now renders verifyOutcome/refusalCount in the live board rows, printResults() table (verify/refused columns), and a standalone refusal-warning block. Pure helper functions (verifyOutcomeOf, refusalCountOf, formatVerify, formatRefusals) are unit-tested in mission.test.ts.
 - `packages/cli/src/commands/loop.ts` — `swarm loop`/`loop --plan`; refuses dirty tree; writes .swarm/loop.log and loop.json.
 - `packages/cli/src/commands/map.ts` — drift/pendingSplits short-circuit for no-op re-runs.
 - `packages/cli/src/commands/verify.ts` — deterministic citation checks + per-module verifier agents via Scheduler; writes verification.md.
