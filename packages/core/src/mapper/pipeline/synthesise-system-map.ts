@@ -8,6 +8,7 @@ export async function synthesiseSystemMap(
   system: { summary: string; stack: string },
   finalModules: ModuleSpec[],
   digest: RepoDigest,
+  verifyCommandMessage?: string,
 ): Promise<void> {
-  await workspace.writeSystem(renderSystemMap(system, finalModules, digest));
+  await workspace.writeSystem(renderSystemMap(system, finalModules, digest, verifyCommandMessage));
 }

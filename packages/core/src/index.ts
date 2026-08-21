@@ -54,6 +54,11 @@ export type { RepoDigest } from './mapper/digest.js';
 export { mapRepository, renderSystemMap, MODULE_MAP_SCHEMA } from './mapper/map.js';
 export { mapProject, detectDrift, pendingSplits } from './mapper/pipeline.js';
 export type { MapResult, MapProgress, MapModuleResult, MapPhase } from './mapper/pipeline.js';
+export { detectVerifyCommand } from './mapper/pipeline/detect-verify-command.js';
+export type {
+  VerifyCommandCandidate,
+  VerifyCommandDetection,
+} from './mapper/pipeline/detect-verify-command.js';
 
 // Swarms
 export { analyzeModule, renderCharter, renderMemory, renderClaim, parseClaimLine } from './swarm/analyst.js';

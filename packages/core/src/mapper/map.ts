@@ -314,6 +314,7 @@ export function renderSystemMap(
   system: { summary: string; stack: string },
   modules: ModuleSpec[],
   digest: RepoDigest,
+  verifyCommandMessage?: string,
 ): string {
   return [
     `# ${digest.repoName}`,
@@ -324,6 +325,7 @@ export function renderSystemMap(
     '',
     `**Size.** ${digest.totalFiles} tracked files across ${modules.length} modules.`,
     '',
+    ...(verifyCommandMessage ? [`**Verify.** ${verifyCommandMessage}`, ''] : []),
     '## Modules',
     '',
     '| Module | Purpose | Owns | Files |',

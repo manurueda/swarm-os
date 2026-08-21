@@ -49,6 +49,12 @@ export interface MapResult {
   areas: Record<string, number>;
   /** Modules claiming the same files, decided against the real file list. */
   conflicts: OwnershipConflict[];
+  /**
+   * What happened with `verifyCommand` detection this run — present only when
+   * detection actually ran, i.e. `verifyCommand` was empty going in. Absent
+   * when the user already had one set, since there is nothing to report.
+   */
+  verifyCommandMessage?: string;
 }
 
 export interface MapProjectOptions {

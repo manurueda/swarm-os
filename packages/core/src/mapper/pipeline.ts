@@ -28,6 +28,7 @@ import { detectAreas } from '../swarm/areas.js';
 import { Workspace } from '../workspace/store.js';
 import type { SwarmConfig } from '../workspace/config.js';
 import { buildDigest } from './digest.js';
+import { applyVerifyCommandDetection } from './pipeline/apply-verify-command-detection.js';
 import { areasWithMemory } from './pipeline/areas-with-memory.js';
 import { analyseModule } from './pipeline/analyse-module.js';
 import { archiveStaleModules } from './pipeline/archive-stale-modules.js';
@@ -48,6 +49,8 @@ import { synthesiseSystemMap } from './pipeline/synthesise-system-map.js';
 import type { MapModuleResult, MapProgress, MapProjectOptions, MapResult } from './pipeline/types.js';
 
 export type { MapPhase, MapProgress, MapModuleResult, MapResult, MapProjectOptions } from './pipeline/types.js';
+export { detectVerifyCommand } from './pipeline/detect-verify-command.js';
+export type { VerifyCommandCandidate, VerifyCommandDetection } from './pipeline/detect-verify-command.js';
 
 /**
  * Modules with real structural sub-domains (`detectAreas` finds enough of
@@ -86,6 +89,12 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
     phase: 'digest',
     message: `${digest.totalFiles} tracked files, ${digest.languages[0]?.[0] ?? 'mixed'} dominant`,
   });
+
+  // A blank verifyCommand silently disables the whole mission verify loop —
+  // never executes anything to find one, only inspects what is already on
+  // disk. Only ever fills a blank; a value the user set is never touched.
+  const verifyCommandMessage = await applyVerifyCommandDetection(workspace, config, digest.languages[0]?.[0]);
+  if (verifyCommandMessage) report({ phase: 'digest', message: verifyCommandMessage });
 
   const state = await workspace.readState();
   const existing = await workspace.listModules();
@@ -262,7 +271,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
 
   // -- 4. Synthesise --------------------------------------------------------
   report({ phase: 'synthesise', message: 'writing system map' });
-  await synthesiseSystemMap(workspace, system, finalModules, digest);
+  await synthesiseSystemMap(workspace, system, finalModules, digest, verifyCommandMessage);
 
   // Prune hashes for modules that no longer exist.
   const finalHashes = pruneStaleHashes(moduleHashes, finalModules);
@@ -285,6 +294,7 @@ export async function mapProject(options: MapProjectOptions): Promise<MapResult>
     conflicts: findOwnershipConflicts(finalModules, digest.files),
     archived,
     areas: await countAreasByModule(workspace, finalModules),
+    ...(verifyCommandMessage ? { verifyCommandMessage } : {}),
   };
 }
 

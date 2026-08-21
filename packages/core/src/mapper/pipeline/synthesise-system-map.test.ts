@@ -51,3 +51,27 @@ test('writes a system map naming the repo and every final module', async () => {
   assert.match(written, /A test repo\./);
   assert.match(written, /billing/);
 });
+
+test('includes the verify command message when one is given', async () => {
+  const workspace = await tempWorkspace();
+
+  await synthesiseSystemMap(
+    workspace,
+    { summary: 'A test repo.', stack: 'TypeScript' },
+    [moduleSpec],
+    digest,
+    'detected verifyCommand: npm test because package.json has a scripts.test entry, alternatives: []',
+  );
+
+  const written = await workspace.readSystem();
+  assert.match(written, /detected verifyCommand: npm test/);
+});
+
+test('omits the verify line entirely when no message is given', async () => {
+  const workspace = await tempWorkspace();
+
+  await synthesiseSystemMap(workspace, { summary: 'A test repo.', stack: 'TypeScript' }, [moduleSpec], digest);
+
+  const written = await workspace.readSystem();
+  assert.doesNotMatch(written, /\*\*Verify\.\*\*/);
+});
