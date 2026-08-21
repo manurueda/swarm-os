@@ -451,26 +451,28 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
     // Verify before review: the author cannot run its own verify command, so
     // this is the only step that knows whether the change actually works.
     report({ phase: 'work', message: 'verifying', module: spec.slug });
-    // TODO(workspace-git): SwarmConfig does not carry maxVerifyRounds yet —
-    // this bridges to it ahead of that field landing. Drop the cast once it does.
-    const maxVerifyRounds = (config as SwarmConfig & { maxVerifyRounds?: number }).maxVerifyRounds ?? 2;
     const verifyLoop = await runVerifyLoop({
       runtime,
       module: spec.slug,
       worktreePath,
       verifyCommand: config.verifyCommand,
-      maxVerifyRounds,
+      maxVerifyRounds: config.maxVerifyRounds,
       baseSpec: workSpec,
       initialOutcome: outcome,
       parseWorkReport,
       onEvent: log,
       ...(options.signal ? { signal: options.signal } : {}),
     });
+    // The initial turn's cost must be captured before `outcome` is replaced
+    // below — `verifyLoop.resumeCostUsd` already sums every resume round, so
+    // adding it to the (now-reassigned) outcome's own costUsd would count the
+    // last resume round twice and drop the initial turn's cost entirely.
+    const initialCostUsd = outcome.costUsd;
     if (verifyLoop.lastOutcome) outcome = verifyLoop.lastOutcome;
     if (verifyLoop.lastWorkReport) workReport = verifyLoop.lastWorkReport;
     const costUsd =
-      outcome.costUsd !== undefined || verifyLoop.resumeCostUsd > 0
-        ? (outcome.costUsd ?? 0) + verifyLoop.resumeCostUsd
+      initialCostUsd !== undefined || verifyLoop.resumeCostUsd > 0
+        ? (initialCostUsd ?? 0) + verifyLoop.resumeCostUsd
         : undefined;
 
     const changed = repoIsGit ? await changedFiles(worktreePath, base, linked) : [];
@@ -534,7 +536,8 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
       ok:
         outcome.ok &&
         workReport?.status !== 'blocked' &&
-        review?.verdict !== 'reject',
+        review?.verdict !== 'reject' &&
+        verifyLoop.verifyOutcome !== 'failed',
       ...(workReport ? { report: workReport } : {}),
       worktree: worktreePath,
       ...(branch ? { branch } : {}),

@@ -98,11 +98,6 @@ function fixPrompt(verifyOutput: string): string {
   ].join('\n');
 }
 
-/**
- * Bridges to a field the runtime does not expose yet: `AgentOutcome` has no
- * `refusalCount` today. Remove this cast once the runtime adds it — this
- * function should then just read `outcome.refusalCount ?? 0`.
- */
 function readRefusalCount(outcome: AgentOutcome): number {
-  return (outcome as AgentOutcome & { refusalCount?: number }).refusalCount ?? 0;
+  return outcome.refusalCount ?? 0;
 }

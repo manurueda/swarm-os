@@ -147,6 +147,22 @@ test('a stream with no refusals never sets the refused flag', () => {
   }
 });
 
+test('an ordinary permission error from the tool itself is not a refusal', () => {
+  // e.g. `ls` on an unreadable directory: is_error is true and the tool's own
+  // stderr says 'Permission denied', but the harness never denied the call.
+  const events = translate(
+    {
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', is_error: true, content: "ls: cannot open 'x': Permission denied" }],
+      },
+    },
+    ctx(),
+  );
+  const [result] = events;
+  if (result?.type === 'agent.tool_result') assert.equal(result.refused, undefined);
+});
+
 test('a result event terminates the agent with usage and cost', () => {
   const events = translate(
     {

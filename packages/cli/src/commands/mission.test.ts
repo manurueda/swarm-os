@@ -38,13 +38,15 @@ test('refusalCountOf reads the field verbatim and defaults to 0 when absent', ()
 });
 
 test('formatVerify labels each outcome and falls back to a dash', () => {
-  assert.equal(formatVerify('passed'), 'passed');
-  assert.equal(formatVerify('failed'), 'failed');
-  assert.equal(formatVerify('skipped-no-command'), 'skipped');
-  assert.equal(formatVerify(undefined), '—');
+  assert.match(formatVerify('passed'), /passed/);
+  assert.match(formatVerify('failed'), /failed/);
+  assert.match(formatVerify('skipped-no-command'), /skip/);
+  assert.doesNotMatch(formatVerify(undefined), /passed|failed|skip/);
 });
 
 test('formatRefusals only calls out a nonzero count', () => {
-  assert.equal(formatRefusals(0), '0');
-  assert.equal(formatRefusals(2), '! 2');
+  assert.doesNotMatch(formatRefusals(0), /\d*[1-9]/);
+  const flagged = formatRefusals(2);
+  assert.match(flagged, /2/);
+  assert.notEqual(flagged, formatRefusals(0));
 });

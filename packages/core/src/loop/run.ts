@@ -32,6 +32,7 @@ import { countLines } from '../architecture/code-stats.js';
 import { buildImportGraph } from '../architecture/import-graph.js';
 import { computeSignals, type Signal } from '../architecture/signals.js';
 import { estimateTokens } from '../workspace/store.js';
+import { isAbsolute, join } from 'node:path';
 import { runMission, type MissionModuleResult } from '../mission/run.js';
 import { runVerify } from '../mission/verify.js';
 import { git, currentBranch, isWorkingTreeCleanIgnoringSwarm } from '../git/worktree.js';
@@ -312,7 +313,7 @@ export async function runLoop(options: RunLoopOptions): Promise<LoopResult> {
     // isolation is verifying the combination.
     if (config.verifyCommand) {
       report({ phase: 'verify', message: config.verifyCommand, task });
-      const verification = await verifyUsable(usable, config.verifyCommand);
+      const verification = await verifyUsable(usable, config.verifyCommand, runVerify, config.verifyEnv);
       if (!verification.ok) {
         attempt.verified = false;
         attempt.note = verification.note;
@@ -412,14 +413,51 @@ export async function verifyUsable(
   usable: MissionModuleResult[],
   verifyCommand: string,
   verify: VerifyFn = runVerify,
+  verifyEnv: Record<string, string> = {},
 ): Promise<{ ok: boolean; note?: string }> {
   for (const result of usable) {
     const verified = result.worktree
-      ? await verify(result.module, result.worktree, verifyCommand)
+      ? await withVerifyEnv(result.worktree, verifyEnv, () =>
+          verify(result.module, result.worktree as string, verifyCommand),
+        )
       : { outcome: 'failed' as const, output: 'no worktree to verify' };
     if (verified.outcome !== 'passed') {
       return { ok: false, note: `${verifyCommand} failed — nothing merged` };
     }
   }
   return { ok: true };
+}
+
+/**
+ * Shadow `process.env` for the duration of a verify call, then restore it.
+ *
+ * The shared `runVerify` helper (owned by the `mission` module) spawns the
+ * verify command with a copy of `process.env` and has no parameter for
+ * project-specific overrides, so this loop sets them on the process itself
+ * around the call — the same worktree-relative PYTHONPATH shadowing the loop
+ * used to build into its own child env before it started calling out to the
+ * shared helper. Values that aren't an absolute path are resolved against the
+ * worktree.
+ */
+async function withVerifyEnv<T>(
+  worktree: string,
+  extraEnv: Record<string, string>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const keys = Object.keys(extraEnv);
+  if (keys.length === 0) return fn();
+
+  const previous = new Map(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) {
+    const value = extraEnv[key] as string;
+    process.env[key] = isAbsolute(value) ? value : join(worktree, value);
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 }

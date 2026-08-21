@@ -152,3 +152,64 @@ test('a module with no worktree cannot be verified and is treated as a failure',
   assert.equal(result.ok, false);
   assert.equal(called, false);
 });
+
+/**
+ * The shared verify helper has no way to accept project-specific env
+ * overrides, so `verifyUsable` shadows `process.env` around the call and
+ * restores it afterwards — the same PYTHONPATH-shadowing the loop used to do
+ * itself before it started calling out to the shared helper.
+ */
+
+test('a relative verifyEnv value is joined to the worktree, applied only during the call, then restored', async () => {
+  const originalPythonPath = process.env.PYTHONPATH;
+  process.env.PYTHONPATH = 'before';
+  try {
+    let seenDuringCall: string | undefined;
+    const result = await verifyUsable(
+      [moduleResult()],
+      'npm test',
+      async () => {
+        seenDuringCall = process.env.PYTHONPATH;
+        return { outcome: 'passed', output: '' };
+      },
+      { PYTHONPATH: 'src' },
+    );
+    assert.equal(result.ok, true);
+    assert.equal(seenDuringCall, '/tmp/worktree-rendering/src');
+    assert.equal(process.env.PYTHONPATH, 'before');
+  } finally {
+    if (originalPythonPath === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = originalPythonPath;
+  }
+});
+
+test('an absolute verifyEnv value is used as-is, not joined to the worktree', async () => {
+  const originalPythonPath = process.env.PYTHONPATH;
+  try {
+    let seenDuringCall: string | undefined;
+    await verifyUsable(
+      [moduleResult()],
+      'npm test',
+      async () => {
+        seenDuringCall = process.env.PYTHONPATH;
+        return { outcome: 'passed', output: '' };
+      },
+      { PYTHONPATH: '/abs/site-packages' },
+    );
+    assert.equal(seenDuringCall, '/abs/site-packages');
+  } finally {
+    if (originalPythonPath === undefined) delete process.env.PYTHONPATH;
+    else process.env.PYTHONPATH = originalPythonPath;
+  }
+});
+
+test('a verifyEnv override that was previously unset is removed again after the call', async () => {
+  delete process.env.PYTHONPATH;
+  await verifyUsable(
+    [moduleResult()],
+    'npm test',
+    async () => ({ outcome: 'passed', output: '' }),
+    { PYTHONPATH: 'src' },
+  );
+  assert.equal(process.env.PYTHONPATH, undefined);
+});

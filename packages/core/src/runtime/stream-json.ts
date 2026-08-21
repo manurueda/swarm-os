@@ -94,12 +94,14 @@ function readRateLimit(raw: unknown): RateLimitSnapshot | undefined {
   };
 }
 
-// The exact strings Claude Code uses when a tool call is refused because the
+// The exact string Claude Code uses when a tool call is refused because the
 // harness's permission mode denies it rather than the tool itself failing.
 // Observed directly from a sandboxed run: `npm test`/`npx tsc --build` refused
-// with 'requires approval' and nothing else in the output distinguishes a
-// refusal from an ordinary tool error.
-const REFUSAL_PATTERNS = [/requires approval/i, /permission denied/i, /not been granted/i];
+// with 'requires approval'. Broader phrases like 'permission denied' are
+// deliberately excluded: an ordinary command (e.g. `ls` on an unreadable
+// directory) also sets is_error true and can emit that exact text in its own
+// stderr, which is a tool failure, not a harness refusal.
+const REFUSAL_PATTERNS = [/requires approval/i];
 
 function extractText(content: unknown): string {
   if (typeof content === 'string') return content;

@@ -43,7 +43,7 @@ test('collectAgent counts refused tool calls into refusalCount', async () => {
     {
       type: 'user',
       message: {
-        content: [{ type: 'tool_result', is_error: true, content: 'permission denied' }],
+        content: [{ type: 'tool_result', is_error: true, content: 'Edit requires approval to run.' }],
       },
     },
     { type: 'result', subtype: 'success', result: 'done' },
@@ -56,6 +56,21 @@ test('collectAgent counts refused tool calls into refusalCount', async () => {
 test('collectAgent reports refusalCount 0 when nothing was refused', async () => {
   const runtime = fakeRuntime([
     { type: 'user', message: { content: [{ type: 'tool_result', is_error: false }] } },
+    { type: 'result', subtype: 'success', result: 'done' },
+  ]);
+
+  const outcome = await collectAgent(runtime, spec);
+  assert.equal(outcome.refusalCount, 0);
+});
+
+test('collectAgent does not count an ordinary tool permission error as a refusal', async () => {
+  const runtime = fakeRuntime([
+    {
+      type: 'user',
+      message: {
+        content: [{ type: 'tool_result', is_error: true, content: 'permission denied' }],
+      },
+    },
     { type: 'result', subtype: 'success', result: 'done' },
   ]);
 
