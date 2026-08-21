@@ -12,7 +12,14 @@ import assert from 'node:assert/strict';
 
 import type { MissionModuleResult } from '@swarm-os/core';
 
-import { formatRefusals, formatVerify, refusalCountOf, verifyOutcomeOf } from './mission.js';
+import {
+  formatRefusals,
+  formatVerify,
+  quarantineCommitHashOf,
+  quarantinedPathsOf,
+  refusalCountOf,
+  verifyOutcomeOf,
+} from './mission.js';
 
 function fakeResult(overrides: Record<string, unknown> = {}): MissionModuleResult {
   return {
@@ -49,4 +56,17 @@ test('formatRefusals only calls out a nonzero count', () => {
   const flagged = formatRefusals(2);
   assert.match(flagged, /2/);
   assert.notEqual(flagged, formatRefusals(0));
+});
+
+test('quarantinedPathsOf reads the field verbatim and defaults to empty when absent', () => {
+  assert.deepEqual(
+    quarantinedPathsOf(fakeResult({ quarantinedPaths: ['assets/foo.wav', 'assets/CREDITS.md'] })),
+    ['assets/foo.wav', 'assets/CREDITS.md'],
+  );
+  assert.deepEqual(quarantinedPathsOf(fakeResult()), []);
+});
+
+test('quarantineCommitHashOf reads the field verbatim and is undefined when absent', () => {
+  assert.equal(quarantineCommitHashOf(fakeResult({ quarantineCommitHash: 'abc1234' })), 'abc1234');
+  assert.equal(quarantineCommitHashOf(fakeResult()), undefined);
 });

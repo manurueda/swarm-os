@@ -99,6 +99,7 @@ function moduleResult(overrides: Partial<MissionModuleResult> = {}): MissionModu
     worktree: '/tmp/worktree-rendering',
     verifyOutcome: 'skipped-no-command',
     refusalCount: 0,
+    quarantinedPaths: [],
     ...overrides,
   };
 }

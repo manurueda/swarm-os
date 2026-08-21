@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { isOwned } from '../swarm/ownership.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -289,36 +290,110 @@ export async function fullDiff(
 }
 
 /**
- * Stage and commit everything in a worktree except its linked dependencies.
+ * Every path git considers changed in a worktree — staged, unstaged, deleted
+ * or untracked — relative to `git status --porcelain`.
  *
- * `linked` (e.g. `['node_modules']`) must be kept out of the commit: it is a
- * symlink this tool created, pointing at an absolute path on one machine, and
- * a directory-style ignore rule like `node_modules/` does not match a symlink
- * of that name.
+ * A rename ("R  old -> new") contributes both sides: the old path still needs
+ * classifying (it disappears, and a disappearing owned file is still an owned
+ * change) and the new one does too.
+ */
+function statusPaths(porcelain: string): string[] {
+  const paths = new Set<string>();
+  for (const raw of porcelain.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const rest = line.slice(2).trim().replace(/^"|"$/g, '');
+    for (const part of rest.split(' -> ')) {
+      const cleaned = part.trim();
+      if (cleaned) paths.add(cleaned);
+    }
+  }
+  return [...paths];
+}
+
+/**
+ * Stage exactly `paths` — additions, modifications and deletions alike —
+ * without touching anything else.
  *
- * Staged in two steps rather than with an `:(exclude)` pathspec. Naming any
- * explicit pathspec changes what `git add` does about ignored files: bare
- * `git add -A` passes over them in silence, while `git add -A -- . :(exclude)x`
- * fails the whole command with "the following paths are ignored". So the
- * pathspec form worked only while the path was NOT ignored, and broke the
- * moment someone fixed their `.gitignore` — which is how missions came to
- * report branches ready for review with nothing committed to them.
+ * Each path is wrapped in `:(literal)` pathspec magic so a filename that
+ * happens to contain a glob metacharacter (`*`, `?`, `[`) is matched as
+ * itself, not interpreted as a wildcard. Unlike the old `:(exclude)` trick,
+ * this never names an ignored path explicitly — every path here came from
+ * `git status`, which does not report ignored files in the first place — so
+ * it does not reintroduce the "git add fails on an ignored pathspec" failure
+ * mode that motivated the old two-step add/unstage.
+ */
+async function stagePaths(worktreePath: string, paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  const pathspecs = paths.map((p) => `:(literal)${p}`);
+  const add = await git(worktreePath, ['add', '-A', '--', ...pathspecs]);
+  if (!add.ok) throw new Error(add.stderr.trim());
+}
+
+/** Commit whatever is currently staged, if anything, and return its short hash. */
+async function commitStaged(worktreePath: string, message: string): Promise<string | undefined> {
+  const staged = await git(worktreePath, ['diff', '--cached', '--name-only']);
+  if (!staged.ok) throw new Error(staged.stderr.trim());
+  if (staged.stdout.trim() === '') return undefined;
+  const commit = await git(worktreePath, ['commit', '-m', message]);
+  if (!commit.ok) throw new Error(commit.stderr.trim());
+  const rev = await git(worktreePath, ['rev-parse', '--short', 'HEAD']);
+  if (!rev.ok) throw new Error(rev.stderr.trim());
+  return rev.stdout.trim();
+}
+
+export interface CommitSplit {
+  /** Set only when at least one owned path was committed. */
+  mainCommitHash?: string;
+  /** Set only when at least one out-of-bounds path was committed. */
+  quarantineCommitHash?: string;
+  /** Every changed path outside the module's `owns` globs, owned or not. */
+  quarantinedPaths: string[];
+}
+
+/**
+ * Stage and commit a worktree's changes split by module ownership.
+ *
+ * A diff that touches both a module's own files and someone else's — the
+ * real incident this fixes deleted another module's audio assets — used to
+ * land as one commit, so ownership was something `checkOwnership` reported
+ * after the fact rather than something the commit itself enforced. This
+ * produces at most two commits instead: a main commit containing only paths
+ * matching `ownsGlobs` (per {@link isOwned}), and, only when something falls
+ * outside them, a second "OUT OF BOUNDS" commit holding everything else —
+ * additions, modifications AND deletions — so a reviewer can drop the second
+ * commit with one rebase gesture and keep the first untouched. When nothing
+ * is out of bounds there is no second commit; when everything is, the main
+ * commit is skipped rather than created empty.
+ *
+ * `linked` (e.g. `['node_modules']`) and `.swarm/` are excluded from both
+ * commits exactly as before — they are filtered out before classification,
+ * so neither ever reaches either commit.
  */
 export async function commitAll(
   worktreePath: string,
+  moduleSlug: string,
+  ownsGlobs: string[],
   message: string,
   linked: string[] = [],
-): Promise<{ ok: boolean; detail: string }> {
-  const add = await git(worktreePath, ['add', '-A']);
-  if (!add.ok) return { ok: false, detail: add.stderr.trim() };
-  // Unstage rather than never-stage: a no-op when the path was ignored anyway.
-  for (const name of hiddenFromWork(linked)) {
-    await git(worktreePath, ['rm', '--cached', '-q', '--ignore-unmatch', '-r', '--', name]);
-  }
+): Promise<CommitSplit> {
   const status = await git(worktreePath, ['status', '--porcelain']);
-  if (status.stdout.trim() === '') return { ok: true, detail: 'nothing to commit' };
-  const commit = await git(worktreePath, ['commit', '-m', message]);
-  return commit.ok
-    ? { ok: true, detail: commit.stdout.trim() }
-    : { ok: false, detail: commit.stderr.trim() };
+  if (!status.ok) throw new Error(status.stderr.trim());
+
+  const hidden = hiddenFromWork(linked);
+  const changed = statusPaths(status.stdout).filter((p) => !isLinkedPath(p, hidden));
+  const owned = changed.filter((p) => isOwned(p, ownsGlobs)).sort();
+  const quarantined = changed.filter((p) => !isOwned(p, ownsGlobs)).sort();
+
+  await stagePaths(worktreePath, owned);
+  const mainCommitHash = await commitStaged(worktreePath, message);
+
+  let quarantineCommitHash: string | undefined;
+  if (quarantined.length > 0) {
+    await stagePaths(worktreePath, quarantined);
+    const quarantineMessage = `OUT OF BOUNDS (${moduleSlug}): ${quarantined.join(', ')}`;
+    quarantineCommitHash = await commitStaged(worktreePath, quarantineMessage);
+  }
+
+  return { mainCommitHash, quarantineCommitHash, quarantinedPaths: quarantined };
 }

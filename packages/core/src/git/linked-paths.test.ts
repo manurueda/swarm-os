@@ -45,8 +45,8 @@ test('commitAll excludes a linked symlink but still commits real changes', async
     // And a genuine, owned change alongside it.
     await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
 
-    const result = await commitAll(root, 'add a.ts', ['node_modules']);
-    assert.equal(result.ok, true);
+    const result = await commitAll(root, 'test-module', ['**'], 'add a.ts', ['node_modules']);
+    assert.ok(result.mainCommitHash);
 
     const show = await git(root, ['show', '--stat', 'HEAD']);
     assert.doesNotMatch(show.stdout, /node_modules/);
@@ -79,8 +79,8 @@ test('commitAll still commits when the linked path is itself gitignored', async 
     await symlink(scratch, join(root, 'node_modules'));
     await writeFile(join(root, 'c.ts'), 'export const c = 1;\n');
 
-    const result = await commitAll(root, 'add c.ts', ['node_modules']);
-    assert.equal(result.ok, true, result.detail);
+    const result = await commitAll(root, 'test-module', ['**'], 'add c.ts', ['node_modules']);
+    assert.ok(result.mainCommitHash);
 
     const lsTree = await git(root, ['ls-tree', '-r', '--name-only', 'HEAD']);
     assert.match(lsTree.stdout, /c\.ts/, 'the real change must reach the branch');
@@ -91,13 +91,11 @@ test('commitAll still commits when the linked path is itself gitignored', async 
   }
 });
 
-test('commitAll reports why it failed rather than returning a bare false', async () => {
+test('commitAll throws rather than failing silently outside a git repo', async () => {
   const root = await mkdtemp(join(tmpdir(), 'swarm-linked-nogit-'));
   try {
     await writeFile(join(root, 'a.ts'), 'export const a = 1;\n');
-    const result = await commitAll(root, 'nope', []);
-    assert.equal(result.ok, false);
-    assert.ok(result.detail.length > 0, 'a silent failure is the worst outcome available');
+    await assert.rejects(() => commitAll(root, 'test-module', ['**'], 'nope', []));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -158,8 +156,8 @@ test('.swarm edits never ride a work branch: invisible to diff, changedFiles and
     const diff = await fullDiff(root, 'HEAD');
     assert.doesNotMatch(diff, /\.swarm/);
 
-    const result = await commitAll(root, 'work');
-    assert.equal(result.ok, true);
+    const result = await commitAll(root, 'test-module', ['**'], 'work');
+    assert.ok(result.mainCommitHash);
     const shown = await git(root, ['show', '--name-only', '--format=', 'HEAD']);
     assert.match(shown.stdout, /a\.ts/);
     assert.doesNotMatch(shown.stdout, /\.swarm/);

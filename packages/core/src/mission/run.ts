@@ -189,6 +189,15 @@ export interface MissionModuleResult {
   committed?: boolean;
   /** Why the commit failed, when it did. A branch is not ready without one. */
   commitError?: string;
+  /**
+   * Paths commitAll actually quarantined into a second commit because they
+   * fell outside the module's `owns` globs — the enforced ground truth,
+   * unlike `ownershipViolations` which is only checkOwnership's pre-commit
+   * signal on the same diff.
+   */
+  quarantinedPaths: string[];
+  /** Short hash of the quarantine commit, when commitAll made one. */
+  quarantineCommitHash?: string;
   contextTokens?: number;
   costUsd?: number;
   error?: string;
@@ -352,6 +361,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
         ok: false,
         changedFiles: [],
         ownershipViolations: [],
+        quarantinedPaths: [],
         verifyOutcome: 'skipped-no-command',
         refusalCount: 0,
         error: 'module disappeared between routing and spawn',
@@ -384,6 +394,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
           ok: false,
           changedFiles: [],
           ownershipViolations: [],
+          quarantinedPaths: [],
           verifyOutcome: 'skipped-no-command',
           refusalCount: 0,
           error: err instanceof Error ? err.message : String(err),
@@ -513,16 +524,25 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
 
     let committed = false;
     let commitError: string | undefined;
+    let quarantinedPaths: string[] = [];
+    let quarantineCommitHash: string | undefined;
     if (repoIsGit && changed.length > 0) {
-      const commit = await commitAll(
-        worktreePath,
-        `${spec.slug}: ${workReport?.summary?.split('\n')[0] ?? goal}`.slice(0, 100),
-        linked,
-      );
-      committed = commit.ok;
-      // A commit that fails silently is the worst outcome available: the work
-      // exists, the branch is announced as ready, and there is nothing on it.
-      if (!commit.ok) commitError = commit.detail;
+      try {
+        const commit = await commitAll(
+          worktreePath,
+          spec.slug,
+          spec.owns,
+          `${spec.slug}: ${workReport?.summary?.split('\n')[0] ?? goal}`.slice(0, 100),
+          linked,
+        );
+        committed = Boolean(commit.mainCommitHash ?? commit.quarantineCommitHash);
+        quarantinedPaths = commit.quarantinedPaths;
+        quarantineCommitHash = commit.quarantineCommitHash;
+      } catch (err) {
+        // A commit that fails silently is the worst outcome available: the work
+        // exists, the branch is announced as ready, and there is nothing on it.
+        commitError = err instanceof Error ? err.message : String(err);
+      }
     }
 
     report({
@@ -543,6 +563,8 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
       ...(branch ? { branch } : {}),
       changedFiles: changed,
       ownershipViolations: ownership.violations,
+      quarantinedPaths,
+      ...(quarantineCommitHash ? { quarantineCommitHash } : {}),
       ...(stat ? { diffStat: stat } : {}),
       ...(review ? { review } : {}),
       verifyOutcome: verifyLoop.verifyOutcome,
@@ -564,6 +586,7 @@ export async function runMission(options: RunMissionOptions): Promise<MissionRes
           ok: false,
           changedFiles: [],
           ownershipViolations: [],
+          quarantinedPaths: [],
           verifyOutcome: 'skipped-no-command',
           refusalCount: 0,
           error: r.message,
@@ -768,6 +791,13 @@ function renderMissionReport(
     if (r.ownershipViolations.length > 0) {
       lines.push('**Ownership violations** — files changed outside this module:', '');
       lines.push(...r.ownershipViolations.map((f) => `- \`${f}\``), '');
+    }
+    if (r.quarantinedPaths.length > 0) {
+      lines.push(
+        `**Quarantined** — committed separately${r.quarantineCommitHash ? ` as \`${r.quarantineCommitHash}\`` : ''}, kept out of the main commit:`,
+        '',
+      );
+      lines.push(...r.quarantinedPaths.map((f) => `- \`${f}\``), '');
     }
     if (r.diffStat) {
       lines.push('```', r.diffStat, '```', '');

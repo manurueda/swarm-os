@@ -67,6 +67,21 @@ export function formatRefusals(n: number): string {
   return n > 0 ? c.red(`${symbols.warn} ${n}`) : c.gray('0');
 }
 
+/**
+ * mission contracts MissionModuleResult to carry quarantinedPaths/
+ * quarantineCommitHash once the commit step splits out-of-bounds changes
+ * into their own commit, but this package may build against a @swarm-os/core
+ * snapshot from before those fields landed. Read them defensively, same as
+ * verifyOutcomeOf/refusalCountOf above.
+ */
+export function quarantinedPathsOf(m: MissionModuleResult): string[] {
+  return (m as unknown as { quarantinedPaths?: string[] }).quarantinedPaths ?? [];
+}
+
+export function quarantineCommitHashOf(m: MissionModuleResult): string | undefined {
+  return (m as unknown as { quarantineCommitHash?: string }).quarantineCommitHash;
+}
+
 export async function missionCommand(args: ParsedArgs): Promise<number> {
   const goal = args.positionals.join(' ').trim();
   if (!goal) {
@@ -268,6 +283,21 @@ export async function missionCommand(args: ParsedArgs): Promise<number> {
     for (const v of violations.slice(0, 12)) note(`  ${v}`);
     if (violations.length > 12) note(`  … and ${violations.length - 12} more`);
     note('  Review these before merging — a module reached outside its own domain.');
+  }
+
+  const quarantined = result.modules.filter((m) => quarantinedPathsOf(m).length > 0);
+  if (quarantined.length > 0) {
+    line();
+    const total = quarantined.reduce((sum, m) => sum + quarantinedPathsOf(m).length, 0);
+    warn(`${total} file(s) quarantined out of bounds into a separate commit:`);
+    for (const m of quarantined) {
+      const paths = quarantinedPathsOf(m);
+      const hash = quarantineCommitHashOf(m);
+      note(`  ${m.module}${hash ? ` — commit ${c.bold(hash)}` : ''}`);
+      for (const p of paths.slice(0, 12)) note(`    ${p}`);
+      if (paths.length > 12) note(`    … and ${paths.length - 12} more`);
+    }
+    note('  Drop that commit with a rebase to keep it off the branch.');
   }
 
   const worked = result.modules.filter((m) => m.branch && m.changedFiles.length > 0);
