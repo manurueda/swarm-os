@@ -4,54 +4,47 @@ _Durable knowledge for the `mapper` swarm. Read on wake, rewritten on sleep._
 
 ## Invariants
 
-- A module's fingerprint hash (hashFiles over its owned files + content fingerprints from `git ls-files -s` / working-tree dirty markers) is the sole basis for 'unchanged' — same files+content => same hash => the module is reused (memory untouched, no agent spawned). Re-running mapProject is therefore incremental: cost is proportional to what moved, not repo size. <sub>`packages/core/src/mapper/pipeline/module-files.ts`</sub>
-- A module that fails analysis has its hash deleted from moduleHashes rather than inheriting its old one, so it is retried on the next map instead of being silently treated as up to date. <sub>`packages/core/src/mapper/pipeline.ts`</sub>
-- surveyModuleAreas (area detection/splitting) runs for EVERY module before that module's own analyst runs, and runs sequentially across modules (not concurrently), because it fans its own area-analysts out across the same Scheduler and overlapping pools would exceed maxConcurrentAgents. <sub>`packages/core/src/mapper/pipeline.ts`</sub>
-- The area/split trigger is purely structural (detectAreas finding real sub-domains under a module's owned files), never based on memory.md size — deliberately, so it works even on a first map before any memory exists. <sub>`packages/core/src/mapper/pipeline/survey-module-areas.ts`</sub>
-- mapRepository rejects any proposed module that owns zero files after matching globs against the digest's real file list; it does one repair round showing the agent exactly which globs matched nothing, and drops still-empty modules afterward rather than ever creating an empty module directory. <sub>`packages/core/src/mapper/map.ts`</sub>
-- Duplicate slugs from the partition agent are deduplicated by keeping only the first occurrence (parseModuleMap), because two modules sharing a slug would share a directory and overwrite each other's memory. <sub>`packages/core/src/mapper/map.ts`</sub>
-- detectDrift treats 'no digestHash on record' as drift=true with unknown=true (unless there are zero modules at all), never as 'unchanged' — an unmapped or state-clobbered workspace must never be misreported as already-mapped-and-current. <sub>`packages/core/src/mapper/pipeline.ts`</sub>
-- When the whole-repo digest hash changes but a given module's own owned-file fingerprint hash is unchanged, that module is NOT reported as drifted (the repo digest can move for reasons no module owns, e.g. .swarm/ itself being tracked and rewritten by every map run). <sub>`packages/core/src/mapper/pipeline.ts`</sub>
-- Every module ends a map run in swarms[slug].state = 'sleeping' in state.json, and any swarm record for a module slug no longer in finalModules is dropped — mapping never leaves an agent 'awake'. <sub>`packages/core/src/mapper/pipeline/build-next-state.ts`</sub>
-- renderModuleCharter's footer promises `swarm map` never overwrites module.md without --force and never touches memory.md/decisions.md at all; analyse-module.ts's normal path always calls workspace.writeModule (i.e. does overwrite module.md on a fresh analysis) and always overwrites memory.md via writeModuleFile — the 'never overwrite without --force' protection, if it exists, lives outside this module (in Workspace), not enforced here. <sub>`packages/core/src/mapper/map.ts` [doc]</sub>
+- A module's fingerprint hash (hashFiles over its owned files + content fingerprints from `git ls-files -s` / working-tree dirty markers) is the sole basis for 'unchanged' — same files+content => same hash => the module is reused (memory untouched, no agent spawned). <sub>`packages/core/src/mapper/pipeline/module-files.ts`</sub>
+- A module that fails analysis has its hash deleted from moduleHashes rather than inheriting its old one, so it's retried next map instead of silently treated as up to date. <sub>`packages/core/src/mapper/pipeline.ts`</sub>
+- surveyModuleAreas runs for EVERY module before that module's own analyst runs, and sequentially across modules (not concurrently) — it fans area-analysts across the same Scheduler and overlapping pools would exceed maxConcurrentAgents. <sub>`packages/core/src/mapper/pipeline.ts`</sub>
+- Area/split trigger is purely structural (detectAreas), never memory.md size — works even on first map before memory exists. <sub>`packages/core/src/mapper/pipeline/survey-module-areas.ts`</sub>
+- mapRepository rejects any proposed module owning zero files after glob-matching; one repair round, then drops still-empty modules — never creates an empty module directory. <sub>`packages/core/src/mapper/map.ts`</sub>
+- Duplicate slugs from the partition agent keep only the first occurrence (parseModuleMap) — shared slug = shared directory = clobbered memory. <sub>`packages/core/src/mapper/map.ts`</sub>
+- detectDrift treats 'no digestHash on record' as drift=true, unknown=true (unless zero modules exist) — never reported as 'unchanged'. <sub>`packages/core/src/mapper/pipeline.ts`</sub>
+- Whole-repo digest hash changing does NOT drift a module whose own owned-file fingerprint is unchanged (digest hash can move for reasons no module owns, e.g. tracked .swarm/). <sub>`packages/core/src/mapper/pipeline.ts`</sub>
+- Every module ends a map run in swarms[slug].state = 'sleeping'; swarm records for slugs no longer in finalModules are dropped. <sub>`packages/core/src/mapper/pipeline/build-next-state.ts`</sub>
+- renderModuleCharter's footer promises `swarm map` never overwrites module.md without --force / never touches memory.md/decisions.md — analyse-module.ts's normal path always overwrites both; that protection, if real, is enforced outside this module. <sub>`packages/core/src/mapper/map.ts` [doc]</sub>
+- applyVerifyCommandDetection only ever fills a blank config.verifyCommand — enforced as its first line (`if (config.verifyCommand) return undefined;`) — so it's safe to call unconditionally on every mapProject run without risk of overwriting a user-set command. <sub>`packages/core/src/mapper/pipeline/apply-verify-command-detection.ts`</sub>
 
 ## Gotchas
 
-- buildDigest's `hash` field intentionally is NOT what per-module drift is computed from — that's module-files.ts's hashFiles(filesFor(...), digest.fingerprints) applied to just that module's owned files. digest.hash is a whole-repo fingerprint used only to short-circuit detectDrift when literally nothing changed. <sub>`packages/core/src/mapper/digest.ts`</sub>
-- digest.sourceFiles is populated ('Every file' section in renderDigest) only under SMALL_REPO_FILES (400) tracked files; above that, only the directory tree (renderTree, capped at 140 lines) is sent to the partition agent, so on large repos the mapper agent literally cannot see individual file paths outside the tree summary and manifests/doc headings. <sub>`packages/core/src/mapper/digest.ts`</sub>
-- areaNames is passed to analyzeModule as a distinct field, not appended into systemSummary text — a comment in analyse-module.ts explains this was previously smuggled through the summary string because two agents built both ends without coordinating; do not revert to string-smuggling. <sub>`packages/core/src/mapper/pipeline/analyse-module.ts`</sub>
-- In analyseModule, if the analyst returns analysis.correctedOwns, the returned hash is recomputed via hashFiles(ownedNow, digest.fingerprints); if it does NOT correct owns, the hash returned is simply entry.hash (computed earlier from the pre-analysis owns/plan). Getting this branch wrong would let a module with corrected ownership be marked 'unchanged' against files it no longer actually owns. <sub>`packages/core/src/mapper/pipeline/analyse-module.ts`</sub>
-- surveyModuleAreas calls workspace.pruneAreas(spec.slug, ...) unconditionally, even when detectAreas returns zero areas — a module that shrank below the area-detection threshold since an earlier, larger map loses whatever area memory it previously had. <sub>`packages/core/src/mapper/pipeline/survey-module-areas.ts`</sub>
-- MODULE_MAP_SCHEMA deliberately has no `pattern` regex constraint on the slug field — a comment explains a regex constraint would force a full structured-output retry (re-sending the whole conversation) on a minor format slip like `reel_core`; normalization happens cheaply in code via slugify() instead. <sub>`packages/core/src/mapper/map.ts`</sub>
-- mapRepository's repair round is only accepted if it strictly improves on the empty-module count (emptyIn(repaired).length < unmatched.length); a repair that doesn't improve is silently discarded and the original (possibly still partially empty) parse is kept, then filtered. <sub>`packages/core/src/mapper/map.ts`</sub>
-- mapProject's costUsd only sums outcome.costUsd from freshly-analysed modules (toAnalyse) and does not include area-survey agent costs from surveyModuleAreas, nor the partition agent's cost from resolvePartition — MapResult.costUsd undercounts total spend for a run that repartitions or splits areas. <sub>`packages/core/src/mapper/pipeline.ts`</sub>
+- buildDigest's `hash` field is NOT what per-module drift is computed from — that's module-files.ts's hashFiles applied to just that module's owned files; digest.hash only short-circuits detectDrift when nothing changed at all. <sub>`packages/core/src/mapper/digest.ts`</sub>
+- digest.sourceFiles is populated only under SMALL_REPO_FILES (400) tracked files; above that only the directory tree (capped 140 lines) is sent to the partition agent. <sub>`packages/core/src/mapper/digest.ts`</sub>
+- areaNames is passed to analyzeModule as a distinct field, not appended into systemSummary text — do not revert to string-smuggling (past bug from uncoordinated agents). <sub>`packages/core/src/mapper/pipeline/analyse-module.ts`</sub>
+- In analyseModule, if analysis.correctedOwns is set, the returned hash is recomputed via hashFiles(ownedNow, ...); otherwise it's just entry.hash from pre-analysis owns. Getting this branch backwards lets a module with corrected ownership be marked 'unchanged' against files it no longer owns. <sub>`packages/core/src/mapper/pipeline/analyse-module.ts`</sub>
+- surveyModuleAreas calls workspace.pruneAreas unconditionally, even with zero detected areas — a module that shrank below the area threshold loses prior area memory. <sub>`packages/core/src/mapper/pipeline/survey-module-areas.ts`</sub>
+- MODULE_MAP_SCHEMA has no `pattern` regex on slug — a regex would force a full structured-output retry on minor slip; normalization happens via slugify() in code instead. <sub>`packages/core/src/mapper/map.ts`</sub>
+- mapRepository's repair round is only accepted if it strictly improves empty-module count; a non-improving repair is discarded silently. <sub>`packages/core/src/mapper/map.ts`</sub>
+- mapProject's costUsd only sums freshly-analysed modules' costs — excludes area-survey agent costs and the partition agent's cost; undercounts total spend on runs that repartition or split areas. <sub>`packages/core/src/mapper/pipeline.ts`</sub>
+- detectVerifyCommand's fallback candidate order (when no dominant-language match) puts Cargo.toml BEFORE go.mod — a repo with both and a non-matching dominant language yields `cargo test`, not `go test`. <sub>`packages/core/src/mapper/pipeline/detect-verify-command.ts`</sub>
+- digest.languages entries are lowercased extensions with no leading dot ('ts', 'py', 'go'); files with no extension (e.g. Makefile) bucket under '(none)' — so a 'make test' candidate's languages array is always empty and can only be picked via matrix-order fallback, never a dominant-language match. <sub>`packages/core/src/mapper/pipeline/detect-verify-command.ts`</sub>
+- New mapper exports meant for cli/other packages must reach `packages/core/src/index.ts`, the flat @swarm-os/core barrel — but that file is owned by the runtime module, not mapper, so mapper cannot edit it directly. Re-exporting from mapper/pipeline.ts alone is NOT sufficient for `import { x } from '@swarm-os/core'` to work. Precedent (2026-08-15, 2026-08-17, 2026-08-21): each time this was missed, review flagged it as a blocking gap. Always leave an explicit follow-up note in decisions.md ("index.ts needs X — owned by runtime, not mine to edit") when adding an export a consumer outside mapper needs; the 2026-08-21 mission (detectVerifyCommand for doctor) missed this note and got a changes-needed review verdict as a result — check decisions.md before assuming it's done. <sub>`packages/core/src/index.ts`</sub>
 
 ## Landmarks
 
-- `packages/core/src/mapper/pipeline/plan-module-analysis.ts` — Decides per-module whether the last analysis still holds (fingerprint match) or a fresh analyst is needed.
-- `packages/core/src/mapper/pipeline/resolve-partition.ts` — Either calls mapRepository fresh or reuses the existing on-disk module list/system summary, based on the `partition` flag from should-partition.ts.
-- `packages/core/src/mapper/pipeline/should-partition.ts` — One-liner: partition iff force || repartition || no existing modules.
-- `packages/core/src/mapper/pipeline/analyse-module.ts` — Runs one module's analyst agent (via swarm/analyst.js analyzeModule), writes module.md + memory.md, applies correctedOwns if the analyst fixed its globs.
-- `packages/core/src/mapper/pipeline/survey-module-areas.ts` — Detects structural sub-domains (detectAreas) inside an oversized module and spawns one analyst per area, writing area.json + memory.md per area under .swarm/modules/<slug>/areas/.
-- `packages/core/src/mapper/pipeline/archive-stale-modules.ts` — Moves module directories dropped by a repartition out of workspace.listModules()'s view.
-- `packages/core/src/mapper/pipeline/load-reused-module.ts` — Builds a MapModuleResult for a module whose fingerprint matched — reads memory.md back only to compute its token count, does not re-analyse.
-- `packages/core/src/mapper/pipeline/build-next-state.ts` — Assembles the next state.json; every module is forced back to state 'sleeping' on every map run.
-- `packages/core/src/mapper/pipeline/serial-queue.ts` — Tiny FIFO promise chain so concurrent analysts writing state.json never race a read-modify-write.
-- `packages/core/src/mapper/pipeline/record-module-progress.ts` — Persists one module's result into state.json immediately as its analyst finishes, through the serial queue — makes a long map run durable/inspectable mid-flight and interruption-safe.
-- `packages/core/src/mapper/pipeline/render-structural-charter.ts` — Fallback module.md written when an analyst fails — structure only, explicitly says the module needs a re-run.
-- `packages/core/src/mapper/pipeline/count-areas-by-module.ts` — Module slug -> number of areas, used for MapResult.areas and pendingSplits.
+- `packages/core/src/mapper/pipeline/plan-module-analysis.ts` — Decides per-module whether last analysis still holds or a fresh analyst is needed.
+- `packages/core/src/mapper/pipeline/resolve-partition.ts` — Calls mapRepository fresh or reuses existing modules/system summary, per should-partition.ts.
+- `packages/core/src/mapper/pipeline/analyse-module.ts` — Runs one module's analyst, writes module.md + memory.md, applies correctedOwns.
+- `packages/core/src/mapper/pipeline/survey-module-areas.ts` — Detects sub-domains, spawns one analyst per area under .swarm/modules/<slug>/areas/.
+- `packages/core/src/mapper/pipeline/build-next-state.ts` — Assembles next state.json; every module forced to 'sleeping'.
+- `packages/core/src/mapper/pipeline/detect-verify-command.ts` — Pure filesystem detection of a candidate verifyCommand (npm/pytest/cargo/go/make matrix), disambiguated by digest's dominant language; returns chosen + alternatives.
+- `packages/core/src/mapper/pipeline/apply-verify-command-detection.ts` — Called by mapProject; fills config.verifyCommand from detect-verify-command only if it was empty; persists to .swarm/config.yaml.
+- `packages/core/src/mapper/pipeline/synthesise-system-map.ts` — Renders system.md, now includes a **Verify.** line reporting the detected/chosen verifyCommand or its absence.
 
 ## Public interface
 
 - mapProject(options: MapProjectOptions): Promise<MapResult> — full incremental map run, re-exported from packages/core/src/index.ts
-- detectDrift(workspace): Promise<{drifted, changedModules, mappedAt?, unknown?, moduleCount}> — re-exported from index.ts
-- pendingSplits(workspace, config): Promise<string[]> — re-exported from index.ts
-- mapRepository(options): Promise<ModuleMapResult> — re-exported from index.ts; used directly by resolve-partition.ts
-- buildDigest(repoRoot): Promise<RepoDigest> — re-exported from index.ts; also imported directly (bypassing the pipeline) by ../loop/run.ts, ../ui/snapshot.ts, ../mission/run.ts
-- renderDigest(digest): string — re-exported from index.ts
-- renderSystemMap, MODULE_MAP_SCHEMA — re-exported from index.ts
-- Types: MapResult, MapProgress, MapModuleResult, MapPhase, MapProjectOptions, RepoDigest — re-exported from index.ts for consumers
-
----
-
-_Surveyed 2026-08-21 by the `mapper` analyst, reading only this module's paths._
+- MapResult now includes verifyCommandMessage?: string — human-readable outcome of verify-command detection for this run
+- detectDrift(workspace), pendingSplits(workspace, config), mapRepository(options), buildDigest(repoRoot), renderDigest(digest), renderSystemMap, MODULE_MAP_SCHEMA — re-exported from index.ts
+- detectVerifyCommand(repoRoot, digest) — pure fs-inspection helper, re-exported from mapper/pipeline.ts; NOT yet reachable via `@swarm-os/core` flat barrel (index.ts edit pending, owned by runtime module — see gotcha above)
+- Types: MapResult, MapProgress, MapModuleResult, MapPhase, MapProjectOptions, RepoDigest — re-exported from index.ts
