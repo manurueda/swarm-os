@@ -29,7 +29,12 @@ import { verifyCommand } from './commands/verify.js';
 import { refactorCommand } from './commands/refactor.js';
 import { uiCommand } from './commands/ui.js';
 import { loopCommand, loopPlanCommand } from './commands/loop.js';
-import { noticeIfUpdated, scheduleBackgroundUpdate, updateCommand } from './commands/update.js';
+import {
+  noticeIfUpdated,
+  scheduleBackgroundUpdate,
+  updateCommand,
+  warnIfStaleBuild,
+} from './commands/update.js';
 import { c, fail, line, note } from './ui.js';
 
 const VERSION = '0.1.0';
@@ -85,6 +90,10 @@ ${c.gray('`claude auth login`; agents inherit that. No API keys, ever.')}
 
 ${c.gray('Updates itself in the background once a day, after a command finishes,')}
 ${c.gray('never during one. Disable with SWARM_NO_UPDATE=1.')}
+
+${c.gray('On a git install, warns once at startup if your TypeScript sources look')}
+${c.gray('newer than the compiled build (source vs tsconfig.tsbuildinfo) — run')}
+${c.gray('`npm run build` to pick up local commits.')}
 `;
 
 function flagBoolArg(args: ReturnType<typeof parseArgs>, name: string): boolean {
@@ -105,7 +114,10 @@ async function main(): Promise<number> {
   }
 
   // A background worker may have installed a new version since last run.
-  if (args.command !== 'update') await noticeIfUpdated();
+  if (args.command !== 'update') {
+    await noticeIfUpdated();
+    await warnIfStaleBuild();
+  }
 
   switch (args.command) {
     case 'doctor':

@@ -12,6 +12,7 @@ import {
   applyUpdate,
   backgroundUpdate,
   checkForUpdate,
+  checkStaleBuild,
   detectInstall,
   isCheckDue,
   readUpdateStatus,
@@ -147,5 +148,27 @@ export async function noticeIfUpdated(): Promise<void> {
     );
   } catch {
     /* ignore */
+  }
+}
+
+/**
+ * One line, shown at the top of a command when a git install's TypeScript
+ * sources look newer than its compiled build. Only the auto-updater covers
+ * being behind origin — a local commit without a rebuild is otherwise
+ * silent. Never runs in the background update worker, and never lets a
+ * failed check delay or break a command.
+ */
+export async function warnIfStaleBuild(): Promise<void> {
+  if (process.env['SWARM_UPDATE_WORKER']) return;
+  try {
+    const install = await detectInstall(SELF_URL);
+    if (install.kind !== 'git' || !install.root) return;
+
+    const result = checkStaleBuild(install.root);
+    if (result?.stale) {
+      warn('local TypeScript sources look newer than the compiled build — run `npm run build`');
+    }
+  } catch {
+    /* a failed stale-build check must never break a command */
   }
 }

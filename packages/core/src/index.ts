@@ -40,6 +40,7 @@ export {
   CHECK_INTERVAL_MS,
 } from './update/index.js';
 export type { InstallInfo, InstallKind, UpdateStatus, ApplyResult } from './update/index.js';
+export { checkStaleBuild } from './update/stale-build.js';
 
 // Workspace
 export { Workspace, SWARM_DIR, estimateTokens } from './workspace/store.js';
